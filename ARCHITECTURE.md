@@ -147,3 +147,20 @@ only unprotected-regression surface in the monorepo.
    into the next UI change)
 5. [ ] R5: `TrackId` keyed on content hash; unblock queue reorder
 6. [ ] R9: `xtask bundle` when distribution nears; R7 LOD with the next pack
+
+## 8. Remediation status (same day)
+
+All actionable findings were fixed the day of the review:
+
+| # | Status | Commit |
+|---|---|---|
+| R1 | **Fixed** — dual-stream equal-power crossfade (final `min(6s, 25%)` window), 0.8s palette wash, staggered prop materialize settling on the incoming track's first downbeat; same-mood morphs in place | `1b995a5` |
+| R2 | **Fixed** — dedicated reverie CI job (fmt/clippy/test) | LocalGPT `78d6ede`; now `.github/workflows/ci.yml` |
+| R3 | **Fixed** — `dispatch_buttons` + `UiAction` messages + five focused handlers; `overlays.rs` split into 9 modules (largest 353 lines). Bonus: fixed the Resume button not restoring `playback.playing` | `6f674e4` |
+| R4 | **Fixed** — `OverlayStack` (Esc pops); Paused stays transport state, queue stays a panel | `6f674e4` |
+| R5 | **Mitigated** — `playing` is path-keyed, so queue reorder won't restart the current track; a content-hash `TrackId` remains deferred until dedupe needs it | `1b995a5` |
+| R6 | **Fixed** — splitmix64-seeded layouts, per-track default seed, re-roll on "Build a different world", pin stores `{mood, seed}` | `f0b6699` |
+| R7 | Deferred by design — LOD/instancing with the next asset-pack expansion | — |
+| R8 | **Fixed** — photo mode samples the readback and retries black frames (bounded, single output path) | `baf0118` |
+| R9 | **Fixed** — `scripts/bundle.sh` assembles dist/ (release binary + fonts + models from `reverie-assets`) | this commit |
+| R10 | **Fixed** — PLAN status corrected; transition engine actually built (R1) | `1b995a5` |

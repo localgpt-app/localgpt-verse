@@ -3,3 +3,4 @@
 # Bundled assets live in the separate `reverie-assets` repo; copied in for dev
 # and at packaging time (PLAN.md §5). Fonts README stays tracked.
 /assets/models
+/dist
