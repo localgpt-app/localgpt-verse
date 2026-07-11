@@ -199,22 +199,22 @@ large).
 
 ## 5. Open questions & decisions
 
-1. **Starter pack location — open.** Contents either way: ~50–100 normalized
-   CC0 `.glb` models (Kenney/Quaternius/Poly Haven) in the three placement
-   tiers (hero landmarks / medium props / ground scatter), tagged per mood
-   (Ember Flats desert rock & dry wood · Velvet Circuit abstract neon &
-   chrome · Tide Gardens coral & kelp · Glass Expanse ice & crystal), plus
-   PBR ground textures and `manifest.json` (provenance + license + blake3 +
-   tags; feeds the Credits screen). Realistic weight 50–300 MB → lean toward
-   a separate `reverie-assets` repo per the monorepo `*-assets` convention;
-   the app repo keeps only fonts and fallback primitives.
+1. **Starter pack location — decided: separate `reverie-assets` repo**
+   (monorepo `*-assets` convention; the app repo keeps only fonts and
+   fallback primitives). Contents: ~50–100 normalized CC0 `.glb` models
+   (Kenney/Quaternius/Poly Haven) in the three placement tiers (hero
+   landmarks / medium props / ground scatter), tagged per mood (Ember Flats
+   desert rock & dry wood · Velvet Circuit abstract neon & chrome · Tide
+   Gardens coral & kelp · Glass Expanse ice & crystal), plus PBR ground
+   textures and `manifest.json` (provenance + license + blake3 + tags; feeds
+   the Credits screen). Realistic weight 50–300 MB.
 2. **Persistence — decided: JSON sidecars.** One JSON per track in the app
    cache dir, named by blake3 content hash (rename/move-proof), e.g.
    `…/reverie/analysis/<hash>.json` holding beats/sections/key/loudness/
    valence-arousal/mood. Never writes into the user's music folder. Migrate
    to rusqlite (monorepo standard) only when the library view needs
    search/sort at scale; sidecars then become the import format.
-3. **"Keep this world" pinning — pending confirmation.** The pause overlay's
+3. **"Keep this world" pinning — decided: confirmed.** The pause overlay's
    "Keep this world — this song will always return here" stores
    `"pinned_world": { "mood": N, "seed": S }` in that track's sidecar; world
    build prefers the pin over the mapper, un-pinning removes the field. The
