@@ -739,14 +739,14 @@ pub fn mode_tab_clicks(
 
 /// Clicking a corner chip toggles its panel (Library / Queue).
 pub fn chip_clicks(
-    mut library_open: ResMut<crate::LibraryOpen>,
+    mut stack: ResMut<crate::OverlayStack>,
     mut queue_open: ResMut<crate::QueueOpen>,
     q: Query<(&HudChip, &Interaction), Changed<Interaction>>,
 ) {
     for (chip, interaction) in &q {
         if *interaction == Interaction::Pressed {
             match chip.0 {
-                ChipKind::Library => library_open.0 = !library_open.0,
+                ChipKind::Library => stack.toggle(crate::Overlay::Library),
                 ChipKind::Queue => queue_open.0 = !queue_open.0,
             }
         }

@@ -53,17 +53,47 @@ pub struct Paused(pub bool);
 #[derive(Resource, Default)]
 pub struct QueueOpen(pub bool);
 
-/// Whether the settings overlay is open.
-#[derive(Resource, Default)]
-pub struct SettingsOpen(pub bool);
+/// A modal overlay screen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Overlay {
+    Settings,
+    Credits,
+    Library,
+}
 
-/// Whether the credits & licenses overlay is open.
+/// The modal overlays as a stack — Esc closes the top one (ARCHITECTURE R4;
+/// replaces three independent bools with hand-ordered priority). The queue is
+/// a side panel (`QueueOpen`) and `Paused` is transport state; both separate.
 #[derive(Resource, Default)]
-pub struct CreditsOpen(pub bool);
+pub struct OverlayStack(Vec<Overlay>);
 
-/// Whether the library/home overlay is open.
-#[derive(Resource, Default)]
-pub struct LibraryOpen(pub bool);
+impl OverlayStack {
+    pub fn open(&mut self, overlay: Overlay) {
+        if !self.0.contains(&overlay) {
+            self.0.push(overlay);
+        }
+    }
+    pub fn close(&mut self, overlay: Overlay) {
+        self.0.retain(|o| *o != overlay);
+    }
+    pub fn toggle(&mut self, overlay: Overlay) {
+        if self.is_open(overlay) {
+            self.close(overlay);
+        } else {
+            self.open(overlay);
+        }
+    }
+    /// Close the topmost overlay; `None` if nothing was open.
+    pub fn pop(&mut self) -> Option<Overlay> {
+        self.0.pop()
+    }
+    pub fn is_open(&self, overlay: Overlay) -> bool {
+        self.0.contains(&overlay)
+    }
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+}
 
 /// Photo mode: frames to wait (HUD hidden) before capturing a clean shot.
 #[derive(Resource, Default)]
@@ -146,9 +176,7 @@ fn main() {
     .init_resource::<CameraMode>()
     .init_resource::<Paused>()
     .init_resource::<QueueOpen>()
-    .init_resource::<SettingsOpen>()
-    .init_resource::<CreditsOpen>()
-    .init_resource::<LibraryOpen>()
+    .init_resource::<OverlayStack>()
     .init_resource::<Photo>()
     .init_resource::<Onboarding>()
     .init_resource::<WorldIntensity>()
@@ -177,7 +205,24 @@ fn main() {
     .add_systems(OnEnter(AppState::InWorld), hud::setup_hud)
     // Always-on: buttons + a living world. The palette wash must write hues
     // before the beat-glow rescale reads them, hence the chain.
-    .add_systems(Update, (overlays::handle_buttons, ease_world_clock))
+    .add_message::<overlays::UiAction>()
+    .add_systems(Update, ease_world_clock)
+    // Button presses broadcast as messages; the focused handlers run after
+    // the dispatcher within the frame.
+    .add_systems(
+        Update,
+        (
+            overlays::dispatch_buttons,
+            (
+                overlays::onboarding_actions,
+                overlays::overlay_actions,
+                overlays::world_actions,
+                overlays::comfort_actions,
+                overlays::app_actions,
+            ),
+        )
+            .chain(),
+    )
     .add_systems(Update, (world::palette_wash, world::animate_world).chain())
     .add_systems(
         Update,
@@ -269,9 +314,7 @@ fn smoke_drive(
     mut next: ResMut<NextState<AppState>>,
     mut queue_open: ResMut<QueueOpen>,
     mut paused: ResMut<Paused>,
-    mut settings_open: ResMut<SettingsOpen>,
-    mut credits_open: ResMut<CreditsOpen>,
-    mut library_open: ResMut<LibraryOpen>,
+    mut stack: ResMut<OverlayStack>,
     mut comfort: ResMut<Comfort>,
     mut photo: ResMut<Photo>,
     mut onboarding: ResMut<Onboarding>,
@@ -327,12 +370,12 @@ fn smoke_drive(
         shot(&mut commands, &dir, "reverie-hud.png");
     }
     if t > 3.3 {
-        library_open.0 = true; // spawns the library
+        stack.open(Overlay::Library); // spawns the library
     }
     if t > 3.9 && *phase == 4 {
         *phase = 5;
         shot(&mut commands, &dir, "reverie-library.png");
-        library_open.0 = false;
+        stack.close(Overlay::Library);
     }
     if t > 4.3 {
         queue_open.0 = true; // spawns the queue panel
@@ -347,7 +390,7 @@ fn smoke_drive(
     if t > 5.7 {
         queue_open.0 = false;
         paused.0 = false; // Settings lifts pause (as the real button does)
-        settings_open.0 = true;
+        stack.open(Overlay::Settings);
         comfort.reduce_flashing = true; // show a toggle in the "on" state
     }
     if t > 6.3 && *phase == 6 {
@@ -355,15 +398,14 @@ fn smoke_drive(
         shot(&mut commands, &dir, "reverie-settings.png");
     }
     if t > 6.7 {
-        credits_open.0 = true;
+        stack.open(Overlay::Credits);
     }
     if t > 7.3 && *phase == 7 {
         *phase = 8;
         shot(&mut commands, &dir, "reverie-credits.png");
     }
     if t > 7.5 {
-        credits_open.0 = false;
-        settings_open.0 = false;
+        stack.clear();
     }
     // Request the photo only once the chrome has been closed for a while, so
     // the capture lands on a stable, clean frame.
@@ -476,9 +518,7 @@ fn input_in_world(
     motion: Res<bevy::input::mouse::AccumulatedMouseMotion>,
     mut paused: ResMut<Paused>,
     mut queue_open: ResMut<QueueOpen>,
-    mut settings_open: ResMut<SettingsOpen>,
-    mut credits_open: ResMut<CreditsOpen>,
-    mut library_open: ResMut<LibraryOpen>,
+    mut stack: ResMut<OverlayStack>,
     mut photo: ResMut<Photo>,
     mut mode: ResMut<CameraMode>,
     mut activity: ResMut<HudActivity>,
@@ -491,13 +531,7 @@ fn input_in_world(
 
     if keys.just_pressed(KeyCode::Escape) {
         // Close the topmost overlay first; only pause when nothing else is up.
-        if credits_open.0 {
-            credits_open.0 = false;
-        } else if settings_open.0 {
-            settings_open.0 = false;
-        } else if library_open.0 {
-            library_open.0 = false;
-        } else {
+        if stack.pop().is_none() {
             paused.0 = !paused.0;
             playback.playing = !paused.0;
         }
@@ -506,7 +540,7 @@ fn input_in_world(
         queue_open.0 = !queue_open.0;
     }
     if keys.just_pressed(KeyCode::KeyL) {
-        library_open.0 = !library_open.0;
+        stack.toggle(Overlay::Library);
     }
     if keys.just_pressed(KeyCode::KeyH) {
         // Jump straight to Hidden.
@@ -534,8 +568,7 @@ fn input_in_world(
         paused.0 = false;
         playback.playing = true;
         queue_open.0 = false;
-        settings_open.0 = false;
-        credits_open.0 = false;
+        stack.clear();
     }
     if paused.0 {
         if keys.just_pressed(KeyCode::ArrowLeft) {
