@@ -144,36 +144,117 @@ pub fn setup_world(
     }
 }
 
-/// Re-tint the world when the mood changes.
-pub fn update_world_palette(
+/// One paintable snapshot of the world's colours.
+#[derive(Clone, Copy)]
+struct Palette {
+    sky_top: Color,
+    ambient: Color,
+    fog: Color,
+    ground: Color,
+    drift_base: Color,
+    accent: Color,
+}
+
+impl Palette {
+    fn of(mood: &crate::theme::WorldMood) -> Self {
+        Self {
+            sky_top: mood.sky_top,
+            ambient: mood.ambient,
+            fog: mood.fog,
+            ground: mood.ground,
+            drift_base: mood.sky_bottom,
+            accent: mood.accent,
+        }
+    }
+
+    fn mix(&self, to: &Self, f: f32) -> Self {
+        use bevy::color::Mix as _;
+        Self {
+            sky_top: self.sky_top.mix(&to.sky_top, f),
+            ambient: self.ambient.mix(&to.ambient, f),
+            fog: self.fog.mix(&to.fog, f),
+            ground: self.ground.mix(&to.ground, f),
+            drift_base: self.drift_base.mix(&to.drift_base, f),
+            accent: self.accent.mix(&to.accent, f),
+        }
+    }
+}
+
+/// Palette-wash duration (spec 1g: "palette wash 0.8s").
+const WASH_SECS: f32 = 0.8;
+
+/// Eased world-recolour state — the first beat of the materialize sequence.
+#[derive(Resource)]
+pub struct PaletteWash {
+    current: Palette,
+    from: Palette,
+    t: f32,
+    active: bool,
+    last_mood: Option<usize>,
+}
+
+impl Default for PaletteWash {
+    fn default() -> Self {
+        let p = Palette::of(&crate::theme::MOODS[0]);
+        Self {
+            current: p,
+            from: p,
+            t: 0.0,
+            active: false,
+            last_mood: Some(0),
+        }
+    }
+}
+
+/// Ease the world's colours toward the current mood instead of snapping
+/// (spec 1g's 0.8s palette wash). Runs before `animate_world`, which rescales
+/// the drifter emissive per-beat while keeping the washed hue.
+#[allow(clippy::too_many_arguments)]
+pub fn palette_wash(
+    time: Res<Time>,
     theme: Res<Theme>,
+    mut wash: ResMut<PaletteWash>,
     world_mats: Option<Res<WorldMaterials>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut ambient_q: Query<&mut AmbientLight>,
     mut fog_q: Query<&mut DistanceFog>,
     mut clear: ResMut<ClearColor>,
 ) {
-    if !theme.is_changed() {
+    let mood_idx = theme.mood % crate::theme::MOODS.len();
+    if wash.last_mood != Some(mood_idx) {
+        wash.last_mood = Some(mood_idx);
+        wash.from = wash.current;
+        wash.t = 0.0;
+        wash.active = true;
+    }
+    if !wash.active {
         return;
     }
-    let mood = theme.current();
 
-    // Sky tint sits behind the fog.
-    clear.0 = mood.sky_top;
+    wash.t += time.delta_secs();
+    let f = (wash.t / WASH_SECS).clamp(0.0, 1.0);
+    let s = f * f * (3.0 - 2.0 * f); // smoothstep
+    let to = Palette::of(theme.current());
+    wash.current = wash.from.mix(&to, s);
+    if f >= 1.0 {
+        wash.active = false;
+    }
+
+    let p = wash.current;
+    clear.0 = p.sky_top;
     for mut ambient in &mut ambient_q {
-        ambient.color = mood.ambient;
+        ambient.color = p.ambient;
     }
     for mut fog in &mut fog_q {
-        fog.color = mood.fog;
+        fog.color = p.fog;
     }
-
     let Some(world_mats) = world_mats else { return };
     if let Some(mut m) = materials.get_mut(&world_mats.ground) {
-        m.base_color = mood.ground;
+        m.base_color = p.ground;
     }
     if let Some(mut m) = materials.get_mut(&world_mats.drifter) {
-        m.base_color = mood.sky_bottom;
-        m.emissive = scaled_linear(mood.accent, 0.6);
+        m.base_color = p.drift_base;
+        m.emissive = scaled_linear(p.accent, 0.6);
     }
 }
 

@@ -18,7 +18,7 @@ use kira::info::Info;
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
 use kira::sound::{FromFileError, PlaybackState};
 use kira::track::{TrackBuilder, TrackHandle};
-use kira::{AudioManager, AudioManagerSettings, DefaultBackend, Frame, Tween};
+use kira::{AudioManager, AudioManagerSettings, DefaultBackend, Easing, Frame, Tween};
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::tag::Accessor;
 
@@ -34,6 +34,22 @@ fn tween_ms(ms: u64) -> Tween {
     }
 }
 
+/// A tween with an easing curve.
+fn tween_ease(secs: f32, easing: Easing) -> Tween {
+    Tween {
+        duration: Duration::from_secs_f32(secs.max(0.05)),
+        easing,
+        ..Default::default()
+    }
+}
+
+/// Crossfade length for a track of `duration` seconds — 6s for full songs
+/// (spec 1r: "6–10s"), scaled down for short material so the fade never eats
+/// the whole track.
+pub(crate) fn crossfade_secs(duration: f32) -> f32 {
+    (duration * 0.25).clamp(1.0, 6.0)
+}
+
 // ---------------------------------------------------------------------------
 // Player
 // ---------------------------------------------------------------------------
@@ -45,8 +61,13 @@ struct AudioInner {
     /// All music plays on this sub-track so the tap effect hears it.
     track: TrackHandle,
     handle: Option<StreamingSoundHandle<FromFileError>>,
-    /// Queue index + path the current handle was started for.
-    playing: Option<(usize, PathBuf)>,
+    /// The previous song, still fading out under the new one (crossfade).
+    fading_out: Option<StreamingSoundHandle<FromFileError>>,
+    /// Fade-in to apply to the next stream started (set when crossfading).
+    fade_in_next: Option<f32>,
+    /// Path the current handle was started for — path-keyed (not index) so a
+    /// queue reorder doesn't restart the playing track (ARCHITECTURE R5).
+    playing: Option<PathBuf>,
     /// One-time "clock live" log for smoke verification.
     clock_logged: bool,
 }
@@ -74,6 +95,8 @@ pub fn init_audio(player: ResMut<AudioPlayer>, tap: Res<AudioTap>) {
                         manager,
                         track,
                         handle: None,
+                        fading_out: None,
+                        fade_in_next: None,
                         playing: None,
                         clock_logged: false,
                     });
@@ -104,25 +127,31 @@ pub fn sync_track_playback(
     }
 
     let idx = playback.current % playback.queue.len();
-    let want = playback.queue[idx].path.clone().map(|p| (idx, p));
+    let want = playback.queue[idx].path.clone();
     let switching = inner.playing != want;
 
     if switching {
         if let Some(handle) = &mut inner.handle {
-            // Skip smear — a quick fade instead of a hard cut (spec 1r).
-            handle.stop(tween_ms(300));
+            // Skip smear — a quick fade instead of a hard cut (spec 1r: 400ms).
+            handle.stop(tween_ms(400));
         }
         inner.handle = None;
         inner.playing = want.clone();
 
-        if let Some((i, path)) = &want {
+        if let Some(path) = &want {
             match StreamingSoundData::from_file(path) {
                 Ok(sound) => {
                     // Trust the decoder's duration over the tag header.
                     let duration = sound.duration().as_secs_f32();
                     if duration > 1.0 {
-                        playback.queue[*i].duration = duration;
+                        playback.queue[idx].duration = duration;
                     }
+                    // Crossfade entry: ramp in on the equal-power counterpart
+                    // of the outgoing stream's fade (see sync_clock).
+                    let sound = match inner.fade_in_next.take() {
+                        Some(secs) => sound.fade_in_tween(tween_ease(secs, Easing::OutPowi(2))),
+                        None => sound,
+                    };
                     match inner.track.play(sound) {
                         Ok(mut handle) => {
                             // A track can start while paused (pause → skip):
@@ -130,7 +159,7 @@ pub fn sync_track_playback(
                             if paused.0 {
                                 handle.pause(tween_ms(0));
                             }
-                            let t = &playback.queue[*i];
+                            let t = &playback.queue[idx];
                             info!("Now playing: {} — {}", t.title, t.artist);
                             inner.handle = Some(handle);
                         }
@@ -159,18 +188,21 @@ pub fn sync_pause(player: Res<AudioPlayer>, paused: Res<Paused>, mut last: Local
     }
     let mut guard = player.0.lock().unwrap();
     let Some(inner) = guard.as_mut() else { return };
-    let Some(handle) = &mut inner.handle else {
-        return;
-    };
-    if paused.0 {
-        handle.pause(tween_ms(220));
-    } else {
-        handle.resume(tween_ms(320));
+    // Both streams breathe together during a crossfade.
+    for handle in inner.handle.iter_mut().chain(inner.fading_out.iter_mut()) {
+        if paused.0 {
+            handle.pause(tween_ms(220));
+        } else {
+            handle.resume(tween_ms(320));
+        }
     }
 }
 
-/// The audio clock owns `elapsed` while a stream is live, and advances the
-/// queue when a track ends naturally.
+/// The audio clock owns `elapsed` while a stream is live, advances the queue
+/// when a track ends, and starts the natural song→song crossfade (spec 1h/1r):
+/// as A approaches its end, it fades out (≈cos curve) while B fades in
+/// (≈sin) — an equal-power pair — and the world morph "lands" on B's first
+/// downbeat via the materialize sequence keyed to B's beat grid.
 pub fn sync_clock(
     player: Res<AudioPlayer>,
     mut playback: ResMut<Playback>,
@@ -178,10 +210,19 @@ pub fn sync_clock(
 ) {
     let mut guard = player.0.lock().unwrap();
     let Some(inner) = guard.as_mut() else { return };
+
+    // Drop the outgoing stream once its fade completes.
+    if inner
+        .fading_out
+        .as_ref()
+        .is_some_and(|f| f.state() == PlaybackState::Stopped)
+    {
+        inner.fading_out = None;
+    }
+
     let Some(handle) = &mut inner.handle else {
         return;
     };
-
     let pos = handle.position() as f32;
     playback.elapsed = pos;
     if !inner.clock_logged && pos > 0.25 {
@@ -190,9 +231,36 @@ pub fn sync_clock(
     }
 
     if handle.state() == PlaybackState::Stopped {
-        // Natural end of file — mirror the simulated end-of-track path.
+        // Hard end (no crossfade ran: single-track queue, or a very short
+        // fade window was missed) — mirror the simulated end-of-track path.
         inner.handle = None;
         inner.playing = None;
+        let mood = playback.advance();
+        theme.mood = mood;
+        return;
+    }
+
+    // Begin the crossfade when A enters its final `cross` seconds. Single-
+    // track queues skip it (the same stream can't overlap itself).
+    let duration = playback.duration();
+    let cross = crossfade_secs(duration);
+    let remaining = duration - pos;
+    if inner.fading_out.is_none()
+        && playback.queue.len() > 1
+        && duration > 2.0
+        && remaining > 0.05
+        && remaining <= cross
+    {
+        if let Some(mut old) = inner.handle.take() {
+            old.stop(tween_ease(cross, Easing::InPowi(2)));
+            inner.fading_out = Some(old);
+        }
+        inner.playing = None;
+        inner.fade_in_next = Some(cross);
+        info!(
+            "Crossfading to: {} ({cross:.1}s)",
+            playback.next_track().title
+        );
         let mood = playback.advance();
         theme.mood = mood;
     }
@@ -325,10 +393,12 @@ pub fn poll_import(
             theme.mood = batch[0].mood;
             // Force the player to restart on the new queue.
             if let Some(inner) = player.0.lock().unwrap().as_mut() {
-                if let Some(handle) = &mut inner.handle {
+                for handle in inner.handle.iter_mut().chain(inner.fading_out.iter_mut()) {
                     handle.stop(tween_ms(200));
                 }
                 inner.handle = None;
+                inner.fading_out = None;
+                inner.fade_in_next = None;
                 inner.playing = None;
             }
         }
@@ -489,6 +559,13 @@ mod tests {
         for path in ["/a.mp3", "/b.mp3", "/c/d.flac", "/e/f/g.wav"] {
             assert!(path_mood(Path::new(path)) < crate::theme::MOODS.len());
         }
+    }
+
+    #[test]
+    fn crossfade_scales_with_duration() {
+        assert_eq!(crossfade_secs(240.0), 6.0); // full songs cap at 6s
+        assert_eq!(crossfade_secs(4.0), 1.0); //   shorts floor at 1s
+        assert_eq!(crossfade_secs(10.0), 2.5); //  quarter of the track between
     }
 
     #[test]

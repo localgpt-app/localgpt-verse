@@ -515,6 +515,15 @@ impl Default for AnalysisStore {
 }
 
 impl AnalysisStore {
+    /// First-beat offset for a track, when analyzed and a grid was found.
+    /// Used to land the materialize sequence on the first downbeat.
+    pub fn beat_offset_for(&self, path: &Path) -> Option<f32> {
+        self.map
+            .get(path)
+            .filter(|a| a.bpm > 0.0)
+            .map(|a| a.beat_offset)
+    }
+
     fn request(&mut self, path: &Path) {
         if self.map.contains_key(path) || self.pending.contains(path) {
             return;

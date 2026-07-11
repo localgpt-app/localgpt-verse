@@ -146,6 +146,7 @@ fn main() {
     .init_resource::<WorldIntensity>()
     .init_resource::<Comfort>()
     .init_resource::<WorldClock>()
+    .init_resource::<world::PaletteWash>()
     .init_resource::<AudioActive>()
     .init_resource::<audio::AudioPlayer>()
     .init_resource::<audio::AudioTap>()
@@ -165,16 +166,10 @@ fn main() {
     .add_systems(OnEnter(AppState::FirstRun), overlays::spawn_first_run)
     .add_systems(OnExit(AppState::FirstRun), overlays::despawn_first_run)
     .add_systems(OnEnter(AppState::InWorld), hud::setup_hud)
-    // Always-on: buttons + a living world.
-    .add_systems(
-        Update,
-        (
-            overlays::handle_buttons,
-            world::update_world_palette,
-            world::animate_world,
-            ease_world_clock,
-        ),
-    )
+    // Always-on: buttons + a living world. The palette wash must write hues
+    // before the beat-glow rescale reads them, hence the chain.
+    .add_systems(Update, (overlays::handle_buttons, ease_world_clock))
+    .add_systems(Update, (world::palette_wash, world::animate_world).chain())
     .add_systems(
         Update,
         (input_first_run, overlays::refresh_onboarding).run_if(in_state(AppState::FirstRun)),
@@ -218,6 +213,7 @@ fn main() {
         (
             input_in_world,
             world_assets::populate_world_props,
+            world_assets::rise_props,
             hud::hud_depth,
             hud::apply_hud_alpha,
             hud::update_hud_accent,

@@ -127,9 +127,13 @@ attribution already wired through the manifest → Credits screen.
 > **Status:** M1–M4 + **M6 done** — real playback, live tap, offline analysis +
 > sidecar cache, rule-based mood + pinning, and the glTF asset pipeline (a
 > 7-model CC0 Poly Haven starter pack in `reverie-assets`, expandable). Fonts
-> (Marcellus + Hanken Grotesk, OFL) bundled. **M5 (CLAP)** remains an optional
-> upgrade to the working M4 mapper — needs a ~150 MB ONNX model + `ort`; **M7**
-> is the deferred upgrade tier (Beat This!/WFC/LLM/Demucs), also downloads.
+> (Marcellus + Hanken Grotesk, OFL) bundled. The **transition engine**
+> (ARCHITECTURE.md R1 — M3's deferred exit criterion) is now built: dual-stream
+> equal-power crossfade in the final `min(6s, 25%)` of each song, 0.8s palette
+> wash, and a staggered prop materialize that settles on the incoming track's
+> first downbeat. **M5 (CLAP)** remains an optional upgrade to the working M4
+> mapper — needs a ~150 MB ONNX model + `ort`; **M7** is the deferred upgrade
+> tier (Beat This!/WFC/LLM/Demucs), also downloads.
 
 
 **M1 — Real playback core.**
