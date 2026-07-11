@@ -3,7 +3,7 @@ name = "reverie"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "Reverie — placeholder Bevy application"
+description = "Reverie — a desktop app that imagines a 3D world for every song"
 
 # Standalone workspace: keeps Reverie out of the main localgpt workspace build
 # and CI (which target `crates/*`). Mirrors how `apps/` holds separate native
