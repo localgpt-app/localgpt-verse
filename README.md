@@ -50,13 +50,17 @@ current world's palette.
   section notches, control hints, Explore/Drift toggle, corner affordances, and
   the three-depth fade behaviour.
 - **Overlays** (`src/overlays.rs`) — first-run import, pause (with world-intensity
-  slider), and the slide-in queue panel.
+  slider), slide-in queue, **Settings** (Comfort group with working toggles), and
+  **Credits & Licenses**.
+- **Comfort** — *Reduce flashing* holds the world glow steady (no beat pulse) and
+  caps UI pulses; *Gentler world motion* damps the sway. Both apply instantly.
 - **Placeholder world** (`src/world.rs`) — a mood-tinted field of drifting shapes
   with HDR + bloom, Explore/Drift cameras, and pause time-dilation, so the HUD
   always overlays a live world.
 
-Not yet built (follow-ups): Settings, Credits & Licenses, and the full 3-step
-onboarding screens; real audio + MIR; asset assembly.
+Not yet built (follow-ups): the full 3-step onboarding, the Library/Home screen,
+and the non-Comfort settings groups (display-only for now); real audio + MIR;
+asset assembly.
 
 ## Fonts
 

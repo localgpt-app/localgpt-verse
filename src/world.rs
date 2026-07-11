@@ -183,25 +183,35 @@ pub fn animate_world(
     time: Res<Time>,
     clock: Res<WorldClock>,
     beat: Res<Beat>,
+    comfort: Res<crate::Comfort>,
     world_mats: Option<Res<WorldMaterials>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut drifters: Query<(&Drifter, &mut Transform)>,
 ) {
     let t = time.elapsed_secs();
     let dt = time.delta_secs() * clock.speed;
+    // Comfort › Gentler world motion damps the sway (spec 1n).
+    let gentle = if comfort.gentler_motion { 0.4 } else { 1.0 };
 
     for (d, mut tf) in &mut drifters {
         let p = t * clock.speed;
-        tf.translation.y = d.base.y + (p * 0.4 + d.seed * std::f32::consts::TAU).sin() * 0.6;
-        tf.translation.x = d.base.x + (p * 0.23 + d.seed * std::f32::consts::PI).cos() * 0.4;
-        tf.rotate_y(dt * (0.2 + d.seed.fract() * 0.4));
+        tf.translation.y =
+            d.base.y + (p * 0.4 + d.seed * std::f32::consts::TAU).sin() * 0.6 * gentle;
+        tf.translation.x =
+            d.base.x + (p * 0.23 + d.seed * std::f32::consts::PI).cos() * 0.4 * gentle;
+        tf.rotate_y(dt * (0.2 + d.seed.fract() * 0.4) * gentle);
     }
 
     // Beat-reactive emissive on the shared drifter material. (Split out of a
     // let-chain: chained `let` bindings are read-only in Rust 2024.)
     let Some(world_mats) = world_mats else { return };
     if let Some(mut material) = materials.get_mut(&world_mats.drifter) {
-        let glow = 0.55 + beat.pulse * 0.9 * beat.energy;
+        // Comfort › Reduce flashing holds the glow steady (no beat pulse).
+        let glow = if comfort.reduce_flashing {
+            0.7
+        } else {
+            0.55 + beat.pulse * 0.9 * beat.energy
+        };
         material.emissive = scaled_linear_from(material.emissive, glow);
     }
 }

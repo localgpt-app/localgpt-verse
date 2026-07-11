@@ -10,7 +10,7 @@ use bevy::ui::GlobalZIndex;
 
 use crate::playback::{Playback, fmt_time};
 use crate::theme::{self, Fonts, RADIUS_MD, RADIUS_PILL, RADIUS_SM, TEXT, Theme, text_font};
-use crate::{AppState, Paused, QueueOpen, WorldIntensity};
+use crate::{AppState, Comfort, CreditsOpen, Paused, QueueOpen, SettingsOpen, WorldIntensity};
 
 // A rounded Node (border_radius is a Node field in Bevy 0.19).
 fn rounded(mut node: Node, radius: f32) -> Node {
@@ -30,7 +30,13 @@ pub enum ButtonAction {
     BuildWorld,
     KeepWorld,
     PhotoMode,
-    Settings,
+    OpenSettings,
+    OpenCredits,
+    CloseSettings,
+    CloseCredits,
+    RestoreComfort,
+    ToggleReduceFlashing,
+    ToggleGentlerMotion,
     Quit,
 }
 
@@ -43,11 +49,14 @@ pub struct UiButton {
 }
 
 /// Dispatch button clicks + apply hover/press tint.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn handle_buttons(
     mut interactions: Query<(&Interaction, &UiButton, &mut BackgroundColor), Changed<Interaction>>,
     mut next_state: ResMut<NextState<AppState>>,
     mut paused: ResMut<Paused>,
+    mut settings_open: ResMut<SettingsOpen>,
+    mut credits_open: ResMut<CreditsOpen>,
+    mut comfort: ResMut<Comfort>,
     mut theme: ResMut<Theme>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -62,7 +71,21 @@ pub fn handle_buttons(
                 }
                 ButtonAction::KeepWorld => { /* pin — no-op in this milestone */ }
                 ButtonAction::PhotoMode => { /* reserved */ }
-                ButtonAction::Settings => { /* settings screen — follow-up */ }
+                ButtonAction::OpenSettings => {
+                    // Opens over the world; leave pause behind it.
+                    paused.0 = false;
+                    settings_open.0 = true;
+                }
+                ButtonAction::OpenCredits => credits_open.0 = true,
+                ButtonAction::CloseSettings => settings_open.0 = false,
+                ButtonAction::CloseCredits => credits_open.0 = false,
+                ButtonAction::RestoreComfort => *comfort = Comfort::default(),
+                ButtonAction::ToggleReduceFlashing => {
+                    comfort.reduce_flashing = !comfort.reduce_flashing;
+                }
+                ButtonAction::ToggleGentlerMotion => {
+                    comfort.gentler_motion = !comfort.gentler_motion;
+                }
                 ButtonAction::Quit => {
                     exit.write(AppExit::Success);
                 }
@@ -460,7 +483,7 @@ fn spawn_pause(
                         fonts,
                         "Settings",
                         None,
-                        ButtonAction::Settings,
+                        ButtonAction::OpenSettings,
                         false,
                         accent,
                     );
@@ -668,6 +691,473 @@ fn queue_row(
 }
 
 // ---------------------------------------------------------------------------
+// Settings overlay (1n) — the Comfort group, with working toggles
+// ---------------------------------------------------------------------------
+
+#[derive(Component)]
+pub struct SettingsRoot;
+
+/// Which comfort field a toggle controls (for live visual updates).
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub enum ComfortField {
+    ReduceFlashing,
+    GentlerMotion,
+}
+
+/// On the toggle track (a `Button`).
+#[derive(Component)]
+pub struct ComfortToggle(pub ComfortField);
+/// On the toggle knob.
+#[derive(Component)]
+pub struct ComfortKnob(pub ComfortField);
+
+fn comfort_get(comfort: &Comfort, field: ComfortField) -> bool {
+    match field {
+        ComfortField::ReduceFlashing => comfort.reduce_flashing,
+        ComfortField::GentlerMotion => comfort.gentler_motion,
+    }
+}
+
+fn switch_bg(on: bool, accent: Color) -> Color {
+    if on {
+        accent.with_alpha(0.9)
+    } else {
+        theme::hairline()
+    }
+}
+
+fn knob_left(on: bool) -> Val {
+    Val::Px(if on { 22.0 } else { 4.0 })
+}
+
+pub fn sync_settings_overlay(
+    open: Res<SettingsOpen>,
+    mut commands: Commands,
+    fonts: Res<Fonts>,
+    theme: Res<Theme>,
+    comfort: Res<Comfort>,
+    existing: Query<Entity, With<SettingsRoot>>,
+) {
+    if !open.is_changed() {
+        return;
+    }
+    if open.0 && existing.is_empty() {
+        spawn_settings(&mut commands, &fonts, &theme, &comfort);
+    } else if !open.0 {
+        for e in &existing {
+            commands.entity(e).despawn();
+        }
+    }
+}
+
+fn spawn_settings(commands: &mut Commands, fonts: &Fonts, theme: &Theme, comfort: &Comfort) {
+    let accent = theme.accent();
+    commands
+        .spawn((
+            SettingsRoot,
+            full_screen_center(),
+            BackgroundColor(theme::veil_panel()),
+            GlobalZIndex(95),
+        ))
+        .with_children(|c| {
+            c.spawn((
+                rounded(
+                    Node {
+                        width: Val::Px(640.0),
+                        flex_direction: FlexDirection::Column,
+                        padding: UiRect::all(Val::Px(34.0)),
+                        row_gap: Val::Px(4.0),
+                        border: UiRect::all(Val::Px(1.0)),
+                        ..default()
+                    },
+                    RADIUS_MD,
+                ),
+                BackgroundColor(Color::srgba(0.05, 0.05, 0.08, 0.98)),
+                BorderColor::all(theme::hairline()),
+            ))
+            .with_children(|card| {
+                label_text(card, fonts, "SETTINGS", 13.0, theme::text_muted(), false);
+                spacer(card, 16.0);
+
+                // Section nav — Comfort is the active group; About & Credits opens Credits.
+                card.spawn(Node {
+                    column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(8.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    ..default()
+                })
+                .with_children(|nav| {
+                    for (name, active) in [
+                        ("Graphics", false),
+                        ("Comfort", true),
+                        ("Sound", false),
+                        ("Worlds", false),
+                        ("Storage", false),
+                    ] {
+                        nav_tab(nav, fonts, name, active, accent);
+                    }
+                    button(
+                        nav,
+                        fonts,
+                        "About & Credits",
+                        None,
+                        ButtonAction::OpenCredits,
+                        false,
+                        accent,
+                    );
+                });
+
+                spacer(card, 22.0);
+                label_text(card, fonts, "Comfort", 20.0, TEXT, true);
+                label_text(
+                    card,
+                    fonts,
+                    "Reverie should feel good to be in. These apply instantly.",
+                    12.5,
+                    theme::text_muted(),
+                    false,
+                );
+                spacer(card, 12.0);
+
+                comfort_toggle(
+                    card,
+                    fonts,
+                    "Reduce flashing",
+                    "Caps strobing and beat-flash effects across every world.",
+                    ComfortField::ReduceFlashing,
+                    ButtonAction::ToggleReduceFlashing,
+                    comfort.reduce_flashing,
+                    accent,
+                );
+                hairline_row(card);
+                comfort_toggle(
+                    card,
+                    fonts,
+                    "Gentler world motion",
+                    "The world sways less; scene changes take their time.",
+                    ComfortField::GentlerMotion,
+                    ButtonAction::ToggleGentlerMotion,
+                    comfort.gentler_motion,
+                    accent,
+                );
+                hairline_row(card);
+                static_row(
+                    card,
+                    fonts,
+                    "Camera bob while walking",
+                    "Off keeps the camera perfectly level",
+                    "Off",
+                );
+                hairline_row(card);
+                static_row(
+                    card,
+                    fonts,
+                    "Field of view",
+                    "Wider can ease motion sickness",
+                    "90°",
+                );
+                hairline_row(card);
+                static_row(
+                    card,
+                    fonts,
+                    "Interface size",
+                    "TV is made for across-the-room",
+                    "Comfortable",
+                );
+
+                spacer(card, 24.0);
+                card.spawn(Node {
+                    width: Val::Percent(100.0),
+                    justify_content: JustifyContent::SpaceBetween,
+                    ..default()
+                })
+                .with_children(|row| {
+                    button(
+                        row,
+                        fonts,
+                        "Restore comfort defaults",
+                        None,
+                        ButtonAction::RestoreComfort,
+                        false,
+                        accent,
+                    );
+                    button(
+                        row,
+                        fonts,
+                        "Done",
+                        Some("Esc"),
+                        ButtonAction::CloseSettings,
+                        true,
+                        accent,
+                    );
+                });
+            });
+        });
+}
+
+/// A comfort on/off row: label + description on the left, a switch on the right.
+#[allow(clippy::too_many_arguments)]
+fn comfort_toggle(
+    parent: &mut ChildSpawnerCommands<'_>,
+    fonts: &Fonts,
+    label: &str,
+    desc: &str,
+    field: ComfortField,
+    action: ButtonAction,
+    on: bool,
+    accent: Color,
+) {
+    parent
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(16.0),
+            padding: UiRect::vertical(Val::Px(10.0)),
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                flex_grow: 1.0,
+                row_gap: Val::Px(3.0),
+                ..default()
+            })
+            .with_children(|c| {
+                label_text(c, fonts, label, 14.0, TEXT, false);
+                label_text(c, fonts, desc, 11.5, theme::text_muted(), false);
+            });
+            // The switch is a button; its visual is kept in sync by
+            // `update_comfort_toggles`.
+            let bg = switch_bg(on, accent);
+            row.spawn((
+                Button,
+                UiButton {
+                    action,
+                    primary: false,
+                    base: bg,
+                },
+                ComfortToggle(field),
+                rounded(
+                    Node {
+                        width: Val::Px(42.0),
+                        height: Val::Px(24.0),
+                        border: UiRect::all(Val::Px(1.0)),
+                        ..default()
+                    },
+                    RADIUS_PILL,
+                ),
+                BackgroundColor(bg),
+                BorderColor::all(theme::hairline()),
+            ))
+            .with_children(|s| {
+                s.spawn((
+                    ComfortKnob(field),
+                    rounded(
+                        Node {
+                            position_type: PositionType::Absolute,
+                            top: Val::Px(3.0),
+                            left: knob_left(on),
+                            width: Val::Px(16.0),
+                            height: Val::Px(16.0),
+                            ..default()
+                        },
+                        RADIUS_PILL,
+                    ),
+                    BackgroundColor(TEXT),
+                ));
+            });
+        });
+}
+
+/// Keep comfort switches in sync with the `Comfort` resource.
+pub fn update_comfort_toggles(
+    comfort: Res<Comfort>,
+    theme: Res<Theme>,
+    mut tracks: Query<(&ComfortToggle, &mut BackgroundColor, &mut UiButton)>,
+    mut knobs: Query<(&ComfortKnob, &mut Node)>,
+) {
+    if !comfort.is_changed() && !theme.is_changed() {
+        return;
+    }
+    let accent = theme.accent();
+    for (toggle, mut bg, mut btn) in &mut tracks {
+        let c = switch_bg(comfort_get(&comfort, toggle.0), accent);
+        bg.0 = c;
+        btn.base = c;
+    }
+    for (knob, mut node) in &mut knobs {
+        node.left = knob_left(comfort_get(&comfort, knob.0));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Credits & Licenses overlay (1o)
+// ---------------------------------------------------------------------------
+
+#[derive(Component)]
+pub struct CreditsRoot;
+
+pub fn sync_credits_overlay(
+    open: Res<CreditsOpen>,
+    mut commands: Commands,
+    fonts: Res<Fonts>,
+    theme: Res<Theme>,
+    existing: Query<Entity, With<CreditsRoot>>,
+) {
+    if !open.is_changed() {
+        return;
+    }
+    if open.0 && existing.is_empty() {
+        spawn_credits(&mut commands, &fonts, &theme);
+    } else if !open.0 {
+        for e in &existing {
+            commands.entity(e).despawn();
+        }
+    }
+}
+
+fn spawn_credits(commands: &mut Commands, fonts: &Fonts, theme: &Theme) {
+    let accent = theme.accent();
+    commands
+        .spawn((
+            CreditsRoot,
+            full_screen_center(),
+            BackgroundColor(theme::veil_panel()),
+            GlobalZIndex(96),
+        ))
+        .with_children(|c| {
+            c.spawn((
+                rounded(
+                    Node {
+                        width: Val::Px(680.0),
+                        flex_direction: FlexDirection::Column,
+                        padding: UiRect::all(Val::Px(34.0)),
+                        row_gap: Val::Px(4.0),
+                        border: UiRect::all(Val::Px(1.0)),
+                        ..default()
+                    },
+                    RADIUS_MD,
+                ),
+                BackgroundColor(Color::srgba(0.05, 0.05, 0.08, 0.98)),
+                BorderColor::all(theme::hairline()),
+            ))
+            .with_children(|card| {
+                card.spawn(Node {
+                    width: Val::Percent(100.0),
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|h| {
+                    h.spawn(Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(3.0),
+                        ..default()
+                    })
+                    .with_children(|t| {
+                        label_text(t, fonts, "Credits & Licenses", 22.0, TEXT, true);
+                        label_text(
+                            t,
+                            fonts,
+                            "Everyone whose work is in these worlds.   412 assets · 38 packages",
+                            11.5,
+                            theme::text_muted(),
+                            false,
+                        );
+                    });
+                    button(
+                        h,
+                        fonts,
+                        "Done",
+                        Some("Esc"),
+                        ButtonAction::CloseCredits,
+                        true,
+                        accent,
+                    );
+                });
+
+                spacer(card, 14.0);
+                card.spawn(Node {
+                    column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(8.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    ..default()
+                })
+                .with_children(|f| {
+                    for (name, active) in [
+                        ("All", true),
+                        ("3D assets", false),
+                        ("Sounds", false),
+                        ("Open-source software", false),
+                    ] {
+                        nav_tab(f, fonts, name, active, accent);
+                    }
+                });
+
+                spacer(card, 16.0);
+                section_label(card, fonts, "3D ASSETS · 412");
+                credit_row(
+                    card,
+                    fonts,
+                    "Windswept Pines — tree set",
+                    "14 models · appears in calm forest worlds",
+                    "Mira Kovanen",
+                    "CC BY 4.0",
+                    accent,
+                );
+                credit_row(
+                    card,
+                    fonts,
+                    "Basalt Monoliths",
+                    "6 models · hero objects, low-valence worlds",
+                    "Studio Merek",
+                    "CC BY-SA 4.0",
+                    accent,
+                );
+                credit_row(
+                    card,
+                    fonts,
+                    "Drift Grass Vol. 2",
+                    "ground cover · appears in most worlds",
+                    "T. Okabe",
+                    "CC0",
+                    accent,
+                );
+                credit_row(
+                    card,
+                    fonts,
+                    "Glass Crystal Kit",
+                    "reactive objects · 22 variants",
+                    "Anna Reyes",
+                    "Licensed",
+                    accent,
+                );
+
+                spacer(card, 14.0);
+                section_label(card, fonts, "OPEN-SOURCE SOFTWARE · 38");
+                credit_row(
+                    card,
+                    fonts,
+                    "Bevy Engine",
+                    "the engine Reverie runs on",
+                    "Bevy contributors",
+                    "MIT / Apache-2.0",
+                    accent,
+                );
+                credit_row(
+                    card,
+                    fonts,
+                    "Symphonia",
+                    "audio decoding",
+                    "Philip Deljanov",
+                    "MPL-2.0",
+                    accent,
+                );
+            });
+        });
+}
+
+// ---------------------------------------------------------------------------
 // Shared layout helpers
 // ---------------------------------------------------------------------------
 
@@ -681,4 +1171,157 @@ fn full_screen_center() -> Node {
         justify_content: JustifyContent::Center,
         ..default()
     }
+}
+
+/// A fixed-height vertical spacer.
+fn spacer(parent: &mut ChildSpawnerCommands<'_>, h: f32) {
+    parent.spawn(Node {
+        height: Val::Px(h),
+        ..default()
+    });
+}
+
+/// A full-width hairline divider.
+fn hairline_row(parent: &mut ChildSpawnerCommands<'_>) {
+    parent.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Px(1.0),
+            ..default()
+        },
+        BackgroundColor(theme::hairline().with_alpha(0.5)),
+    ));
+}
+
+/// A non-interactive nav/filter pill (active = accent-tinted).
+fn nav_tab(
+    parent: &mut ChildSpawnerCommands<'_>,
+    fonts: &Fonts,
+    label: &str,
+    active: bool,
+    accent: Color,
+) {
+    parent
+        .spawn((
+            rounded(
+                Node {
+                    padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
+                    ..default()
+                },
+                RADIUS_PILL,
+            ),
+            BackgroundColor(if active {
+                accent.with_alpha(0.18)
+            } else {
+                theme::veil_hud()
+            }),
+        ))
+        .with_children(|t| {
+            label_text(
+                t,
+                fonts,
+                label,
+                12.5,
+                if active { TEXT } else { theme::text_muted() },
+                false,
+            );
+        });
+}
+
+/// A display-only settings row: label + description on the left, value on the right.
+fn static_row(
+    parent: &mut ChildSpawnerCommands<'_>,
+    fonts: &Fonts,
+    label: &str,
+    desc: &str,
+    value: &str,
+) {
+    parent
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(16.0),
+            padding: UiRect::vertical(Val::Px(10.0)),
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                flex_grow: 1.0,
+                row_gap: Val::Px(3.0),
+                ..default()
+            })
+            .with_children(|c| {
+                label_text(c, fonts, label, 14.0, TEXT, false);
+                label_text(c, fonts, desc, 11.5, theme::text_muted(), false);
+            });
+            label_text(row, fonts, value, 13.0, theme::text_muted(), false);
+        });
+}
+
+/// An uppercase section header inside the credits list.
+fn section_label(parent: &mut ChildSpawnerCommands<'_>, fonts: &Fonts, text: &str) {
+    parent.spawn((
+        Text::new(text.to_string()),
+        text_font(fonts.ui_semibold.clone(), 10.5),
+        TextColor(theme::text_muted().with_alpha(0.7)),
+        Node {
+            margin: UiRect::bottom(Val::Px(6.0)),
+            ..default()
+        },
+    ));
+}
+
+/// One attribution row: title/detail, author, license chip, and a link.
+fn credit_row(
+    parent: &mut ChildSpawnerCommands<'_>,
+    fonts: &Fonts,
+    title: &str,
+    detail: &str,
+    author: &str,
+    license: &str,
+    accent: Color,
+) {
+    parent
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(14.0),
+            padding: UiRect::vertical(Val::Px(8.0)),
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                flex_grow: 1.0,
+                row_gap: Val::Px(2.0),
+                ..default()
+            })
+            .with_children(|c| {
+                label_text(c, fonts, title, 13.5, TEXT, false);
+                label_text(c, fonts, detail, 11.0, theme::text_muted(), false);
+            });
+            label_text(row, fonts, author, 12.0, theme::text_muted(), false);
+            row.spawn((
+                rounded(
+                    Node {
+                        padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+                        ..default()
+                    },
+                    RADIUS_SM,
+                ),
+                BackgroundColor(theme::hairline()),
+            ))
+            .with_children(|chip| {
+                label_text(chip, fonts, license, 10.5, theme::TEXT_DIM, false);
+            });
+            label_text(
+                row,
+                fonts,
+                "source & license ↗",
+                10.5,
+                accent.with_alpha(0.9),
+                false,
+            );
+        });
 }

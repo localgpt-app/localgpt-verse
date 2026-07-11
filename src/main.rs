@@ -50,6 +50,14 @@ pub struct Paused(pub bool);
 #[derive(Resource, Default)]
 pub struct QueueOpen(pub bool);
 
+/// Whether the settings overlay is open.
+#[derive(Resource, Default)]
+pub struct SettingsOpen(pub bool);
+
+/// Whether the credits & licenses overlay is open.
+#[derive(Resource, Default)]
+pub struct CreditsOpen(pub bool);
+
 /// World-intensity slider value (0..1), shown in the pause overlay.
 #[derive(Resource)]
 pub struct WorldIntensity(pub f32);
@@ -98,6 +106,8 @@ fn main() {
     .init_resource::<CameraMode>()
     .init_resource::<Paused>()
     .init_resource::<QueueOpen>()
+    .init_resource::<SettingsOpen>()
+    .init_resource::<CreditsOpen>()
     .init_resource::<WorldIntensity>()
     .init_resource::<Comfort>()
     .init_resource::<WorldClock>()
@@ -137,7 +147,10 @@ fn main() {
             hud::update_reticle,
             overlays::sync_pause_overlay,
             overlays::sync_queue_overlay,
+            overlays::sync_settings_overlay,
+            overlays::sync_credits_overlay,
             overlays::update_intensity_knob,
+            overlays::update_comfort_toggles,
         )
             .run_if(in_state(AppState::InWorld)),
     );
@@ -167,6 +180,9 @@ fn smoke_drive(
     mut next: ResMut<NextState<AppState>>,
     mut queue_open: ResMut<QueueOpen>,
     mut paused: ResMut<Paused>,
+    mut settings_open: ResMut<SettingsOpen>,
+    mut credits_open: ResMut<CreditsOpen>,
+    mut comfort: ResMut<Comfort>,
     mut exit: MessageWriter<AppExit>,
     mut commands: Commands,
     mut phase: Local<u8>,
@@ -179,11 +195,7 @@ fn smoke_drive(
     }
     if t > 1.2 && *phase == 0 {
         *phase = 1;
-        if let Some(d) = &dir {
-            commands
-                .spawn(Screenshot::primary_window())
-                .observe(save_to_disk(format!("{d}/reverie-hud.png")));
-        }
+        shot(&mut commands, &dir, "reverie-hud.png");
     }
     if t > 1.6 {
         queue_open.0 = true; // spawns the queue panel
@@ -193,14 +205,36 @@ fn smoke_drive(
     }
     if t > 2.7 && *phase == 1 {
         *phase = 2;
-        if let Some(d) = &dir {
-            commands
-                .spawn(Screenshot::primary_window())
-                .observe(save_to_disk(format!("{d}/reverie-overlays.png")));
-        }
+        shot(&mut commands, &dir, "reverie-overlays.png");
     }
-    if t > 3.4 {
+    if t > 3.1 {
+        queue_open.0 = false;
+        paused.0 = false; // Settings lifts pause (as the real button does)
+        settings_open.0 = true;
+        comfort.reduce_flashing = true; // show a toggle in the "on" state
+    }
+    if t > 3.7 && *phase == 2 {
+        *phase = 3;
+        shot(&mut commands, &dir, "reverie-settings.png");
+    }
+    if t > 4.1 {
+        credits_open.0 = true;
+    }
+    if t > 4.7 && *phase == 3 {
+        *phase = 4;
+        shot(&mut commands, &dir, "reverie-credits.png");
+    }
+    if t > 5.1 {
         exit.write(AppExit::Success);
+    }
+}
+
+/// Save a screenshot to `<dir>/<name>` when the smoke test requests one.
+fn shot(commands: &mut Commands, dir: &Option<String>, name: &str) {
+    if let Some(d) = dir {
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(format!("{d}/{name}")));
     }
 }
 
@@ -229,6 +263,8 @@ fn input_in_world(
     motion: Res<bevy::input::mouse::AccumulatedMouseMotion>,
     mut paused: ResMut<Paused>,
     mut queue_open: ResMut<QueueOpen>,
+    mut settings_open: ResMut<SettingsOpen>,
+    mut credits_open: ResMut<CreditsOpen>,
     mut mode: ResMut<CameraMode>,
     mut activity: ResMut<HudActivity>,
     mut beat: ResMut<Beat>,
@@ -238,8 +274,15 @@ fn input_in_world(
     let mut wake = keys.get_just_pressed().len() > 0 || motion.delta != Vec2::ZERO;
 
     if keys.just_pressed(KeyCode::Escape) {
-        paused.0 = !paused.0;
-        playback.playing = !paused.0;
+        // Close the topmost overlay first; only pause when nothing else is up.
+        if credits_open.0 {
+            credits_open.0 = false;
+        } else if settings_open.0 {
+            settings_open.0 = false;
+        } else {
+            paused.0 = !paused.0;
+            playback.playing = !paused.0;
+        }
     }
     if keys.just_pressed(KeyCode::Tab) {
         queue_open.0 = !queue_open.0;
