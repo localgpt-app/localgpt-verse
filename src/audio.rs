@@ -7,18 +7,22 @@
 //! (the built-in demo queue) → same.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bevy::prelude::*;
+use kira::effect::{Effect, EffectBuilder};
+use kira::info::Info;
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
 use kira::sound::{FromFileError, PlaybackState};
-use kira::{AudioManager, AudioManagerSettings, DefaultBackend, Tween};
+use kira::track::{TrackBuilder, TrackHandle};
+use kira::{AudioManager, AudioManagerSettings, DefaultBackend, Frame, Tween};
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::tag::Accessor;
 
-use crate::playback::{Playback, Track};
+use crate::playback::{Beat, Playback, Track};
 use crate::theme::Theme;
 use crate::{AudioActive, Paused};
 
@@ -35,7 +39,11 @@ fn tween_ms(ms: u64) -> Tween {
 // ---------------------------------------------------------------------------
 
 struct AudioInner {
+    /// Owns the audio thread — never read after setup, must stay alive.
+    #[allow(dead_code)]
     manager: AudioManager<DefaultBackend>,
+    /// All music plays on this sub-track so the tap effect hears it.
+    track: TrackHandle,
     handle: Option<StreamingSoundHandle<FromFileError>>,
     /// Queue index + path the current handle was started for.
     playing: Option<(usize, PathBuf)>,
@@ -49,18 +57,30 @@ struct AudioInner {
 #[derive(Resource, Default)]
 pub struct AudioPlayer(Mutex<Option<AudioInner>>);
 
+/// Lock-free signals shared with the audio thread (see [`TapEffect`]).
+#[derive(Resource, Default, Clone)]
+pub struct AudioTap(Arc<TapShared>);
+
 /// Create the audio device. On failure the app runs silent (simulated clock).
-pub fn init_audio(player: ResMut<AudioPlayer>) {
+pub fn init_audio(player: ResMut<AudioPlayer>, tap: Res<AudioTap>) {
     let mut guard = player.0.lock().unwrap();
     match AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()) {
-        Ok(manager) => {
-            *guard = Some(AudioInner {
-                manager,
-                handle: None,
-                playing: None,
-                clock_logged: false,
-            });
-            info!("Audio device ready");
+        Ok(mut manager) => {
+            // Music sub-track with the analysis tap effect (PLAN.md M2).
+            let builder = TrackBuilder::new().with_effect(TapBuilder(tap.0.clone()));
+            match manager.add_sub_track(builder) {
+                Ok(track) => {
+                    *guard = Some(AudioInner {
+                        manager,
+                        track,
+                        handle: None,
+                        playing: None,
+                        clock_logged: false,
+                    });
+                    info!("Audio device ready");
+                }
+                Err(e) => warn!("Audio mixer setup failed — running silent ({e})"),
+            }
         }
         Err(e) => warn!("No audio device — running silent ({e})"),
     }
@@ -103,7 +123,7 @@ pub fn sync_track_playback(
                     if duration > 1.0 {
                         playback.queue[*i].duration = duration;
                     }
-                    match inner.manager.play(sound) {
+                    match inner.track.play(sound) {
                         Ok(mut handle) => {
                             // A track can start while paused (pause → skip):
                             // hold it silently until resume.
@@ -319,6 +339,142 @@ pub fn poll_import(
     if done {
         info!("Library import finished: {} tracks", import.count);
         import.rx = None;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Live tap (PLAN.md M2) — allocation-free DSP on the audio thread
+// ---------------------------------------------------------------------------
+//
+// Full FFT analysis belongs to the offline pass (M3); the live tap only needs
+// two cheap signals: a smoothed loudness envelope ("energy") and bass-onset
+// impulses ("pulse"). One-pole filters are real-time safe and good enough —
+// bass onsets track the beat for most music.
+
+/// f32s shared across threads as atomic bit patterns.
+#[derive(Default)]
+pub struct TapShared {
+    /// Normalized loudness 0..1 (fast RMS over slow RMS).
+    energy: AtomicU32,
+    /// Onset impulse latch; the app consumes (zeroes) it.
+    pulse: AtomicU32,
+}
+
+impl TapShared {
+    fn store(atomic: &AtomicU32, v: f32) {
+        atomic.store(v.to_bits(), Ordering::Relaxed);
+    }
+    fn load(atomic: &AtomicU32) -> f32 {
+        f32::from_bits(atomic.load(Ordering::Relaxed))
+    }
+}
+
+struct TapBuilder(Arc<TapShared>);
+
+impl EffectBuilder for TapBuilder {
+    type Handle = ();
+    fn build(self) -> (Box<dyn Effect>, Self::Handle) {
+        (
+            Box::new(TapEffect {
+                shared: self.0,
+                lp: 0.0,
+                sq_fast: 0.0,
+                sq_slow: 0.0,
+                low_fast: 0.0,
+                low_slow: 0.0,
+                cooldown: 0.0,
+                pulse_latch: 0.0,
+            }),
+            (),
+        )
+    }
+}
+
+struct TapEffect {
+    shared: Arc<TapShared>,
+    /// One-pole low-pass state (~120 Hz) isolating the bass band.
+    lp: f32,
+    /// Fast/slow mean-square envelopes of the full signal (~25ms / ~1.2s).
+    sq_fast: f32,
+    sq_slow: f32,
+    /// Fast/slow envelopes of the bass band (~15ms / ~700ms).
+    low_fast: f32,
+    low_slow: f32,
+    /// Seconds until another onset may fire (debounce).
+    cooldown: f32,
+    pulse_latch: f32,
+}
+
+/// One-pole smoothing coefficient for time-constant `tau` at step `dt`.
+fn one_pole(dt: f32, tau: f32) -> f32 {
+    1.0 - (-dt / tau).exp()
+}
+
+impl Effect for TapEffect {
+    fn process(&mut self, input: &mut [Frame], dt: f64, _info: &Info) {
+        let dt = dt as f32;
+        let k_lp = one_pole(dt, 1.0 / (2.0 * std::f32::consts::PI * 120.0));
+        let k_fast = one_pole(dt, 0.025);
+        let k_slow = one_pole(dt, 1.2);
+        let k_lfast = one_pole(dt, 0.015);
+        let k_lslow = one_pole(dt, 0.7);
+
+        for frame in input.iter() {
+            let mono = (frame.left + frame.right) * 0.5;
+            // Bass band via one-pole low-pass.
+            self.lp += k_lp * (mono - self.lp);
+            let low_sq = self.lp * self.lp;
+            let sq = mono * mono;
+
+            self.sq_fast += k_fast * (sq - self.sq_fast);
+            self.sq_slow += k_slow * (sq - self.sq_slow);
+            self.low_fast += k_lfast * (low_sq - self.low_fast);
+            self.low_slow += k_lslow * (low_sq - self.low_slow);
+
+            self.cooldown = (self.cooldown - dt).max(0.0);
+            // Onset: the bass envelope jumps well above its running average.
+            if self.cooldown == 0.0 && self.low_slow > 1e-7 && self.low_fast > self.low_slow * 2.2 {
+                self.pulse_latch = 1.0;
+                self.cooldown = 0.18; // ≥180ms between onsets (≈ ≤ 333 BPM)
+            }
+        }
+
+        // Publish once per buffer (a few hundred frames), not per frame.
+        let energy = if self.sq_slow > 1e-8 {
+            ((self.sq_fast / (self.sq_slow * 2.5)).sqrt()).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        TapShared::store(&self.shared.energy, energy);
+        if self.pulse_latch > 0.0 {
+            TapShared::store(&self.shared.pulse, self.pulse_latch);
+            self.pulse_latch = 0.0;
+        }
+    }
+}
+
+/// Feed the live tap into `Beat` while real audio plays. The pulse latch is
+/// consumed here; `advance_playback` handles decay (and the beat-grid phase
+/// once analysis lands, PLAN.md M3).
+pub fn update_beat_from_tap(
+    tap: Res<AudioTap>,
+    audio_active: Res<AudioActive>,
+    time: Res<Time>,
+    mut beat: ResMut<Beat>,
+) {
+    if !audio_active.0 {
+        return;
+    }
+    // Smooth the published energy a little more UI-side.
+    let target = TapShared::load(&tap.0.energy);
+    let k = (time.delta_secs() * 8.0).min(1.0);
+    beat.energy = (beat.energy + (target - beat.energy) * k).clamp(0.0, 1.0);
+
+    // Consume the onset latch.
+    let latch = TapShared::load(&tap.0.pulse);
+    if latch > 0.0 {
+        TapShared::store(&tap.0.pulse, 0.0);
+        beat.pulse = beat.pulse.max(latch);
     }
 }
 

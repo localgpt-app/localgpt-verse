@@ -124,6 +124,12 @@ attribution already wired through the manifest → Credits screen.
 
 ## 3. Implementation steps (each lands green: build + clippy + fmt + tests + smoke)
 
+> **Status:** M1–M4 done (real playback, live tap, offline analysis + sidecar
+> cache, rule-based mood + pinning). M5 (CLAP) and M6 (asset pipeline) need
+> external downloads (model weights / CC0 packs) and are deferred to a session
+> where those can be fetched; M7 is the optional upgrade tier.
+
+
 **M1 — Real playback core.**
 Add kira/symphonia/lofty/rfd/walkdir/dirs. Folder import fills `Playback.queue`
 from disk (tags via lofty); play/pause/seek/skip drive kira; `elapsed` reads

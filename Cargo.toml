@@ -21,6 +21,14 @@ lofty = "0.24"    # tag + duration reading for the library scan
 rfd = "0.17"      # native folder picker ("Choose your music folder…")
 walkdir = "2"     # library scan
 
+# M2/M3 — analysis (see PLAN.md §1.2): offline decode + DSP + sidecar cache
+symphonia = { version = "0.5", features = ["mp3", "aac", "alac", "isomp4", "aiff"] }
+realfft = "3"     # real-input FFT for onset/section analysis
+blake3 = "1"      # content-hash keys for the analysis cache
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"  # sidecar serialization
+dirs = "6"        # per-user cache directory
+
 # Bevy's recommended dev profile: optimize dependencies but keep fast rebuilds
 # of our own crate.
 [profile.dev]

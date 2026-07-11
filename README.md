@@ -25,13 +25,18 @@ Opens a window titled **Reverie**. You start in a three-step onboarding
 (photosensitivity → controls → import); click through it, or *Skip setup* /
 press **Enter** to jump straight into a world.
 
-**Real playback (PLAN.md M1):** *Choose your music folder…* scans a folder
-(MP3/FLAC/WAV/OGG/M4A/AIFF), replaces the demo queue with your tracks, and
-plays them through kira/symphonia — the HUD clock, progress bar, and queue
-follow the actual audio, pause audibly holds its breath, and track ends
-advance the world. Without an import (or an audio device) the app falls back
-to the silent simulated transport. Dev shortcut: `REVERIE_IMPORT=<dir>`
-imports at startup without the picker.
+**Real playback + analysis (PLAN.md M1–M4):** *Choose your music folder…*
+scans a folder (MP3/FLAC/WAV/OGG/M4A/AIFF), replaces the demo queue with your
+tracks, and plays them through kira/symphonia — the HUD clock, progress bar,
+and queue follow the actual audio, pause audibly holds its breath, and track
+ends advance the world. A **live audio tap** (a kira effect) drives the beat
+pulse and world glow from the real signal, and a **background analysis pass**
+(symphonia decode → realfft) recovers tempo, a beat grid, section boundaries
+(the progress notches), an energy curve, and a **mood** (which world) — cached
+as a JSON sidecar per track (blake3-keyed, in the app data dir; your music
+folder is never written to). *Keep this world* pins the mood into that sidecar.
+Without an import (or an audio device) the app falls back to the silent
+simulated transport. Dev shortcut: `REVERIE_IMPORT=<dir>` imports at startup.
 
 ### Controls
 

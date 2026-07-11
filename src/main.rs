@@ -5,6 +5,7 @@
 //! and asset-assembly pipeline described in `idea.md` comes later; for now the
 //! transport and beat are simulated (see [`playback`]).
 
+mod analysis;
 mod audio;
 mod hud;
 mod overlays;
@@ -146,7 +147,9 @@ fn main() {
     .init_resource::<WorldClock>()
     .init_resource::<AudioActive>()
     .init_resource::<audio::AudioPlayer>()
+    .init_resource::<audio::AudioTap>()
     .init_resource::<audio::ImportState>()
+    .init_resource::<analysis::AnalysisStore>()
     // Setup.
     .add_systems(
         Startup,
@@ -189,12 +192,24 @@ fn main() {
             .run_if(in_state(AppState::InWorld))
             .run_if(not_paused),
     )
-    // In-world: input, transport, HUD, overlays.
+    // Transport & beat, ordered: analysis applies the grid/sections/mood on a
+    // track change, the live tap feeds energy/onsets, then advance decays the
+    // pulse, derives phase, and (when simulated) moves the clock.
+    .add_systems(
+        Update,
+        (
+            analysis::sync_analysis,
+            audio::update_beat_from_tap,
+            playback::advance_playback,
+        )
+            .chain()
+            .run_if(in_state(AppState::InWorld)),
+    )
+    // In-world: input, HUD, overlays.
     .add_systems(
         Update,
         (
             input_in_world,
-            playback::advance_playback,
             hud::hud_depth,
             hud::apply_hud_alpha,
             hud::update_hud_accent,

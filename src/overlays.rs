@@ -67,6 +67,8 @@ pub fn handle_buttons(
     mut photo: ResMut<crate::Photo>,
     mut onboarding: ResMut<crate::Onboarding>,
     mut import: ResMut<crate::audio::ImportState>,
+    mut analysis: ResMut<crate::analysis::AnalysisStore>,
+    playback: Res<Playback>,
     mut theme: ResMut<Theme>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -98,7 +100,16 @@ pub fn handle_buttons(
                     // "same song, a new place" — re-roll the world only.
                     theme.mood = (theme.mood + 1) % theme::MOODS.len();
                 }
-                ButtonAction::KeepWorld => { /* pin — no-op in this milestone */ }
+                ButtonAction::KeepWorld => {
+                    // Pin the current mood to this track's analysis sidecar so
+                    // the song always returns to this world (spec 1k).
+                    if !playback.queue.is_empty() {
+                        let idx = playback.current % playback.queue.len();
+                        if let Some(path) = playback.queue[idx].path.clone() {
+                            analysis.toggle_pin(&path, theme.mood);
+                        }
+                    }
+                }
                 ButtonAction::PhotoMode => {
                     // Clear the chrome (incl. this pause overlay) and capture.
                     photo.request();

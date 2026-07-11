@@ -135,8 +135,13 @@ pub struct Beat {
     pub phase: f32,
     pub pulse: f32,
     pub energy: f32,
-    /// Wall-clock accumulator used to shape the energy envelope.
+    /// Wall-clock accumulator used to shape the simulated energy envelope.
     pub clock: f32,
+    /// First-beat offset in seconds (from analysis, PLAN.md M3).
+    pub offset: f32,
+    /// True once `bpm`/`offset` come from real analysis — the phase is then
+    /// derived from the transport clock instead of integrated.
+    pub grid: bool,
 }
 
 impl Default for Beat {
@@ -147,15 +152,20 @@ impl Default for Beat {
             pulse: 0.0,
             energy: 0.6,
             clock: 0.0,
+            offset: 0.0,
+            grid: false,
         }
     }
 }
 
 /// Advance the transport and synthesise the beat/energy signals.
 ///
-/// While a real audio stream is live (`AudioActive`), the audio clock in
-/// `audio.rs` owns `elapsed` and end-of-track; only the beat/energy
-/// simulation runs here (replaced by real analysis in PLAN.md M2/M3).
+/// Signal ownership by source (PLAN.md M1–M3):
+/// - no real audio → everything simulated here;
+/// - real audio, no analysis → `audio.rs` owns elapsed + energy/pulse (live
+///   tap); phase free-runs at the default bpm;
+/// - real audio + analysis grid → phase/pulse derive from the transport
+///   clock against the measured beat grid (predictive, tight).
 pub fn advance_playback(
     time: Res<Time>,
     audio_active: Res<crate::AudioActive>,
@@ -164,31 +174,42 @@ pub fn advance_playback(
     mut theme: ResMut<crate::theme::Theme>,
 ) {
     let dt = time.delta_secs();
+    let live = audio_active.0;
 
-    // Energy: a slow breathing envelope so the world/HUD feels alive even
-    // without real audio. Range ~0.35..0.9.
+    // Simulated energy envelope — only while no live tap feeds it.
     beat.clock += dt;
-    beat.energy = 0.62 + 0.28 * (beat.clock * 0.35).sin() * (beat.clock * 0.11).cos();
-    beat.energy = beat.energy.clamp(0.3, 0.95);
+    if !live {
+        beat.energy = 0.62 + 0.28 * (beat.clock * 0.35).sin() * (beat.clock * 0.11).cos();
+        beat.energy = beat.energy.clamp(0.3, 0.95);
+    }
 
     if !playback.playing {
         // Pulse still decays so a paused world settles.
         beat.pulse = (beat.pulse - dt * 3.0).max(0.0);
         return;
     }
-
-    // Beat phase.
-    let beats_per_sec = beat.bpm / 60.0;
-    let prev = beat.phase;
-    beat.phase = (beat.phase + dt * beats_per_sec).fract();
-    if beat.phase < prev {
-        // Crossed a beat boundary — spike the pulse.
-        beat.pulse = 1.0;
-    }
     beat.pulse = (beat.pulse - dt * 4.0).max(0.0);
 
+    // Beat phase.
+    if live && beat.grid {
+        // Derived from the real clock against the measured grid.
+        let prev = beat.phase;
+        beat.phase = ((playback.elapsed - beat.offset).max(0.0) * beat.bpm / 60.0).fract();
+        if beat.phase < prev {
+            beat.pulse = 1.0;
+        }
+    } else {
+        let prev = beat.phase;
+        beat.phase = (beat.phase + dt * beat.bpm / 60.0).fract();
+        // Spike on wrap only when fully simulated; with a live tap (but no
+        // grid yet) real onsets own the pulse.
+        if beat.phase < prev && !live {
+            beat.pulse = 1.0;
+        }
+    }
+
     // Transport — simulated only while no real stream owns the clock.
-    if audio_active.0 {
+    if live {
         return;
     }
     playback.elapsed += dt;
