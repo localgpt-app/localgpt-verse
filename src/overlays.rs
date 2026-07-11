@@ -1169,13 +1169,14 @@ pub fn sync_credits_overlay(
     mut commands: Commands,
     fonts: Res<Fonts>,
     theme: Res<Theme>,
+    assets: Res<crate::world_assets::WorldAssets>,
     existing: Query<Entity, With<CreditsRoot>>,
 ) {
     if !open.is_changed() {
         return;
     }
     if open.0 && existing.is_empty() {
-        spawn_credits(&mut commands, &fonts, &theme);
+        spawn_credits(&mut commands, &fonts, &theme, assets.manifest.as_ref());
     } else if !open.0 {
         for e in &existing {
             commands.entity(e).despawn();
@@ -1183,7 +1184,12 @@ pub fn sync_credits_overlay(
     }
 }
 
-fn spawn_credits(commands: &mut Commands, fonts: &Fonts, theme: &Theme) {
+fn spawn_credits(
+    commands: &mut Commands,
+    fonts: &Fonts,
+    theme: &Theme,
+    manifest: Option<&crate::world_assets::AssetManifest>,
+) {
     let accent = theme.accent();
     commands
         .spawn((
@@ -1262,18 +1268,34 @@ fn spawn_credits(commands: &mut Commands, fonts: &Fonts, theme: &Theme) {
                 });
 
                 spacer(card, 16.0);
-                section_label(card, fonts, "3D ASSETS");
-                // No 3D assets are bundled yet — worlds are procedural
-                // primitives (PLAN.md M6). Per-asset CC0/CC-BY attribution
-                // reads from the asset manifest once the pack ships.
-                label_text(
-                    card,
-                    fonts,
-                    "No asset packs bundled yet — worlds are procedural for now.",
-                    11.5,
-                    theme::text_muted(),
-                    false,
-                );
+                // Real per-asset CC0/CC-BY attribution from the bundled asset
+                // manifest (PLAN.md M6); falls back to a note when none ships.
+                match manifest {
+                    Some(m) if !m.assets.is_empty() => {
+                        section_label(card, fonts, &format!("3D ASSETS · {}", m.assets.len()));
+                        for a in &m.assets {
+                            let detail = format!(
+                                "{} · {}",
+                                a.tier_label(),
+                                theme::MOODS[a.mood % theme::MOODS.len()].world_name
+                            );
+                            credit_row(
+                                card, fonts, &a.name, &detail, &a.author, &a.license, accent,
+                            );
+                        }
+                    }
+                    _ => {
+                        section_label(card, fonts, "3D ASSETS");
+                        label_text(
+                            card,
+                            fonts,
+                            "No asset packs bundled yet — worlds are procedural for now.",
+                            11.5,
+                            theme::text_muted(),
+                            false,
+                        );
+                    }
+                }
 
                 spacer(card, 14.0);
                 section_label(

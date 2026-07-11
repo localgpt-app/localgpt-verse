@@ -80,10 +80,10 @@ impl Fonts {
     /// Load the design fonts, gracefully falling back to the embedded default
     /// font for any file that isn't present on disk.
     pub fn load(asset_server: &AssetServer) -> Self {
-        // Asset root is `assets/` relative to the working directory.
+        // Resolve against the same asset root Bevy uses (see `world_assets`).
+        let root = crate::world_assets::asset_root();
         let pick = |file: &str| -> Handle<Font> {
-            let path = std::path::Path::new("assets").join(file);
-            if path.exists() {
+            if root.join(file).exists() {
                 asset_server.load(file.to_string())
             } else {
                 Handle::default()

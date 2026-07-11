@@ -205,15 +205,26 @@ large).
 
 ## 5. Open questions & decisions
 
-1. **Starter pack location — decided: separate `reverie-assets` repo**
-   (monorepo `*-assets` convention; the app repo keeps only fonts and
-   fallback primitives). Contents: ~50–100 normalized CC0 `.glb` models
-   (Kenney/Quaternius/Poly Haven) in the three placement tiers (hero
-   landmarks / medium props / ground scatter), tagged per mood (Ember Flats
-   desert rock & dry wood · Velvet Circuit abstract neon & chrome · Tide
-   Gardens coral & kelp · Glass Expanse ice & crystal), plus PBR ground
-   textures and `manifest.json` (provenance + license + blake3 + tags; feeds
-   the Credits screen). Realistic weight 50–300 MB.
+1. **Starter pack location & distribution — decided.**
+   - *Source control (dev):* a separate `reverie-assets` repo (monorepo
+     `*-assets` convention), cloned alongside the app; the app repo keeps only
+     fonts + fallback primitives. `apps/reverie/assets/models/` is gitignored
+     in the app repo and populated from `reverie-assets`.
+   - *Distribution (ship):* the packaging step **bundles** the vetted pack into
+     the app download — **no first-run asset download**. Rationale: preserves
+     the "everything local, nothing uploaded" promise the onboarding makes,
+     needs no CDN/download-manager/failure-handling, and ~100–300 MB is
+     unremarkable for a native desktop app. (If the library ever grows large,
+     bundle a ~50–100 MB core pack and make *extra* packs an optional download
+     — deferred; not needed for v1.)
+   - *Contents:* ~50–100 CC0 `.glb` models (Kenney/Quaternius/Poly Haven) in
+     three placement tiers (hero landmarks / medium props / ground scatter),
+     tagged per mood (Ember Flats desert rock & dry wood · Velvet Circuit
+     abstract neon & chrome · Tide Gardens coral & kelp · Glass Expanse ice &
+     crystal), plus PBR ground textures and `manifest.json` (provenance +
+     license + tags; feeds the Credits screen). Loaded raw (uncompressed glb,
+     no runtime Draco); offline normalization is an optimization, not required
+     for v1.
 2. **Persistence — decided: JSON sidecars.** One JSON per track in the app
    cache dir, named by blake3 content hash (rename/move-proof), e.g.
    `…/reverie/analysis/<hash>.json` holding beats/sections/key/loudness/

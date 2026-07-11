@@ -12,6 +12,7 @@ mod overlays;
 mod playback;
 mod theme;
 mod world;
+mod world_assets;
 
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
@@ -150,10 +151,16 @@ fn main() {
     .init_resource::<audio::AudioTap>()
     .init_resource::<audio::ImportState>()
     .init_resource::<analysis::AnalysisStore>()
+    .init_resource::<world_assets::WorldAssets>()
     // Setup.
     .add_systems(
         Startup,
-        (world::setup_world, audio::init_audio, auto_import),
+        (
+            world::setup_world,
+            world_assets::load_asset_manifest,
+            audio::init_audio,
+            auto_import,
+        ),
     )
     .add_systems(OnEnter(AppState::FirstRun), overlays::spawn_first_run)
     .add_systems(OnExit(AppState::FirstRun), overlays::despawn_first_run)
@@ -210,6 +217,7 @@ fn main() {
         Update,
         (
             input_in_world,
+            world_assets::populate_world_props,
             hud::hud_depth,
             hud::apply_hud_alpha,
             hud::update_hud_accent,
@@ -268,6 +276,22 @@ fn smoke_drive(
 ) {
     let t = time.elapsed_secs();
     let dir = std::env::var("REVERIE_SHOT").ok();
+
+    // Single settled capture of the loaded world (avoids the multi-screenshot
+    // readback flakiness): straight to the world, one shot at 6s, exit at 8s.
+    if std::env::var("REVERIE_ONESHOT").is_ok() {
+        if t > 0.5 && *state.get() == AppState::FirstRun {
+            next.set(AppState::InWorld);
+        }
+        if t > 6.0 && *phase == 0 {
+            *phase = 1;
+            shot(&mut commands, &dir, "reverie-world.png");
+        }
+        if t > 8.0 {
+            exit.write(AppExit::Success);
+        }
+        return;
+    }
 
     // --- Onboarding walk (FirstRun) ---
     if t > 0.4 && *phase == 0 {
