@@ -15,7 +15,7 @@ mod world;
 mod world_assets;
 
 use bevy::prelude::*;
-use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
 
 use hud::HudActivity;
 use playback::{Beat, Playback};
@@ -69,6 +69,12 @@ pub struct LibraryOpen(pub bool);
 #[derive(Resource, Default)]
 pub struct Photo {
     pub pending: Option<u8>,
+    /// GPU readback occasionally returns an all-black frame on some machines
+    /// (ARCHITECTURE R8) — bounded re-requests paper over it.
+    pub retries: u8,
+    /// Output path for the in-flight request; retries overwrite it so a
+    /// flaky readback never litters black files.
+    pub path: Option<String>,
 }
 
 impl Photo {
@@ -76,6 +82,8 @@ impl Photo {
     /// later (enough for the chrome to clear and the frame to settle).
     pub fn request(&mut self) {
         self.pending = Some(8);
+        self.retries = 0;
+        self.path = None;
     }
 }
 
@@ -406,14 +414,33 @@ fn photo_capture(
     activity.minimal = 0.0;
 
     if n == 0 {
-        let path = photo_path();
+        let path = photo.path.get_or_insert_with(photo_path).clone();
         info!("Reverie photo saved to {path}");
         commands
             .spawn(Screenshot::primary_window())
-            .observe(save_to_disk(path));
+            .observe(save_to_disk(path))
+            .observe(photo_black_check);
         photo.pending = None;
     } else {
         photo.pending = Some(n - 1);
+    }
+}
+
+/// GPU readback sometimes hands back an all-black frame (ARCHITECTURE R8).
+/// Sample the captured image; if it's black, re-request the photo (bounded).
+fn photo_black_check(event: On<ScreenshotCaptured>, mut photo: ResMut<Photo>) {
+    let Some(data) = event.image.data.as_ref() else {
+        return;
+    };
+    // Sample every ~97th RGBA pixel; ignore alpha (opaque even on black frames).
+    let black = data
+        .chunks_exact(4)
+        .step_by(97)
+        .all(|px| px[0] < 8 && px[1] < 8 && px[2] < 8);
+    if black && photo.retries < 3 {
+        photo.retries += 1;
+        photo.pending = Some(8);
+        warn!("Photo readback was black — retrying ({}/3)", photo.retries);
     }
 }
 
