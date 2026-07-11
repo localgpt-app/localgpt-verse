@@ -1226,7 +1226,7 @@ fn spawn_credits(commands: &mut Commands, fonts: &Fonts, theme: &Theme) {
                         label_text(
                             t,
                             fonts,
-                            "Everyone whose work is in these worlds.   412 assets · 38 packages",
+                            "Everyone whose work is in these worlds.",
                             11.5,
                             theme::text_muted(),
                             false,
@@ -1262,67 +1262,73 @@ fn spawn_credits(commands: &mut Commands, fonts: &Fonts, theme: &Theme) {
                 });
 
                 spacer(card, 16.0);
-                section_label(card, fonts, "3D ASSETS · 412");
-                credit_row(
+                section_label(card, fonts, "3D ASSETS");
+                // No 3D assets are bundled yet — worlds are procedural
+                // primitives (PLAN.md M6). Per-asset CC0/CC-BY attribution
+                // reads from the asset manifest once the pack ships.
+                label_text(
                     card,
                     fonts,
-                    "Windswept Pines — tree set",
-                    "14 models · appears in calm forest worlds",
-                    "Mira Kovanen",
-                    "CC BY 4.0",
-                    accent,
-                );
-                credit_row(
-                    card,
-                    fonts,
-                    "Basalt Monoliths",
-                    "6 models · hero objects, low-valence worlds",
-                    "Studio Merek",
-                    "CC BY-SA 4.0",
-                    accent,
-                );
-                credit_row(
-                    card,
-                    fonts,
-                    "Drift Grass Vol. 2",
-                    "ground cover · appears in most worlds",
-                    "T. Okabe",
-                    "CC0",
-                    accent,
-                );
-                credit_row(
-                    card,
-                    fonts,
-                    "Glass Crystal Kit",
-                    "reactive objects · 22 variants",
-                    "Anna Reyes",
-                    "Licensed",
-                    accent,
+                    "No asset packs bundled yet — worlds are procedural for now.",
+                    11.5,
+                    theme::text_muted(),
+                    false,
                 );
 
                 spacer(card, 14.0);
-                section_label(card, fonts, "OPEN-SOURCE SOFTWARE · 38");
-                credit_row(
+                section_label(
                     card,
                     fonts,
-                    "Bevy Engine",
-                    "the engine Reverie runs on",
-                    "Bevy contributors",
-                    "MIT / Apache-2.0",
-                    accent,
+                    &format!("OPEN-SOURCE SOFTWARE · {}", SOFTWARE_CREDITS.len()),
                 );
-                credit_row(
-                    card,
-                    fonts,
-                    "Symphonia",
-                    "audio decoding",
-                    "Philip Deljanov",
-                    "MPL-2.0",
-                    accent,
-                );
+                for (name, detail, author, license) in SOFTWARE_CREDITS {
+                    credit_row(card, fonts, name, detail, author, license, accent);
+                }
             });
         });
 }
+
+/// The app's real open-source dependencies, shown in Credits. Kept honest by
+/// hand (the loud few; the full tree is in `Cargo.lock`).
+const SOFTWARE_CREDITS: &[(&str, &str, &str, &str)] = &[
+    (
+        "Bevy Engine",
+        "the engine Reverie runs on",
+        "Bevy contributors",
+        "MIT / Apache-2.0",
+    ),
+    (
+        "Kira",
+        "audio mixer, clocks & tweens",
+        "Andrew Minnich",
+        "MIT / Apache-2.0",
+    ),
+    (
+        "Symphonia",
+        "audio decoding (MP3/FLAC/OGG…)",
+        "Philip Deljanov",
+        "MPL-2.0",
+    ),
+    (
+        "Lofty",
+        "music tag reading",
+        "Serial-ATA",
+        "MIT / Apache-2.0",
+    ),
+    (
+        "RealFFT / RustFFT",
+        "spectral analysis",
+        "Henrik Enquist",
+        "MIT / Apache-2.0",
+    ),
+    (
+        "BLAKE3",
+        "content-hash cache keys",
+        "BLAKE3 team",
+        "CC0 / Apache-2.0",
+    ),
+    ("rfd", "native folder picker", "PolyMeilex", "MIT"),
+];
 
 // ---------------------------------------------------------------------------
 // Shared layout helpers
