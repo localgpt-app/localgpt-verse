@@ -89,11 +89,14 @@ impl Fonts {
                 Handle::default()
             }
         };
+        // Hanken Grotesk ships as one variable font; share it across the UI
+        // weight roles (Bevy renders the default instance).
+        let hanken = pick("fonts/HankenGrotesk.ttf");
         Self {
             display: pick("fonts/Marcellus-Regular.ttf"),
-            ui: pick("fonts/HankenGrotesk-Regular.ttf"),
-            ui_medium: pick("fonts/HankenGrotesk-Medium.ttf"),
-            ui_semibold: pick("fonts/HankenGrotesk-SemiBold.ttf"),
+            ui: hanken.clone(),
+            ui_medium: hanken.clone(),
+            ui_semibold: hanken,
         }
     }
 }
