@@ -1,0 +1,149 @@
+# Reverie — Architecture Review (as built)
+
+**Status:** Accepted (review of shipped M1–M6 state)
+**Date:** 2026-07-11
+**Scope:** `apps/reverie` (5,143 lines, 9 modules) + `reverie-assets`, evaluated
+against `idea.md` (product research) and the design spec's timing promises.
+**Verdict up front:** the architecture is sound for its scale and matches the
+product thesis; nothing needs a rewrite. The two structural debts worth paying
+soon are the **missing transition engine** (crossfade/materialize — the
+product's signature feel, and the one place shipped milestones fell short of
+their own spec) and **UI-layer coupling** (`overlays.rs` + boolean-resource
+sprawl). Everything else is maintenance-grade.
+
+## 1. System map
+
+```
+                 Bevy main thread                        other threads
+┌──────────────────────────────────────────┐   ┌───────────────────────────┐
+│ UI (hud.rs, overlays.rs)                 │   │ kira audio thread (cpal)  │
+│   reads: Playback, Beat, Theme, Comfort  │   │   StreamingSound decode   │
+│   writes: intent resources (Paused, …)   │   │   TapEffect: energy/onset │
+├──────────────────────────────────────────┤   │   → AtomicU32 (lock-free) │
+│ Transport (audio.rs systems)             │◄──┤                           │
+│   sync_track_playback / pause / clock    │   ├───────────────────────────┤
+│   owns elapsed + end-of-track while live │   │ import scan thread        │
+├──────────────────────────────────────────┤   │   walkdir+lofty → mpsc    │
+│ Signals (playback.rs advance_playback)   │   ├───────────────────────────┤
+│   ladder: simulation → live tap → grid   │◄──┤ analysis worker thread    │
+├──────────────────────────────────────────┤   │   symphonia→realfft→tempo │
+│ World (world.rs, world_assets.rs)        │   │   /sections/energy/mood   │
+│   procedural ambient + manifest props    │   │   → mpsc, JSON sidecars   │
+└──────────────────────────────────────────┘   └───────────────────────────┘
+         persistence: blake3-keyed sidecars in the app data dir
+         assets: reverie-assets repo → assets/models/ (bundled at ship)
+```
+
+Threading is channel/atomic-only across boundaries; the single shared-state
+exception is `Mutex<AudioManager>` (kira is `Send`, not `Sync`; locks are
+microseconds). No `unsafe`, no GPL deps, CC0-only assets, OFL fonts.
+
+## 2. Load-bearing decisions that are working
+
+1. **The resource seam.** The UI reads exactly three data resources
+   (`Playback`, `Beat`, `Theme`) and writes small intent resources. This held
+   through three backend replacements (simulated → kira playback → live tap →
+   analysis grid) with **zero UI changes** — the strongest validation of the
+   design. Keep treating these three as the app's public API.
+2. **The signal-ownership ladder** (`advance_playback` doc): simulation owns
+   everything → live audio owns clock+energy+onsets → analysis grid owns
+   phase/sections/mood. Each rung is a strict upgrade with automatic fallback,
+   which is why the app cannot be broken by a missing device, file, manifest,
+   or sidecar. This pattern should be preserved as M5/M7 land (CLAP/Beat This!
+   are just higher rungs).
+3. **Content-hash sidecars.** blake3-keyed JSON in the app data dir: rename-
+   and move-proof, human-debuggable, no schema migrations, never touches the
+   music folder. Right call for this scale (revisit rusqlite only when a
+   library view needs search over thousands of tracks — PLAN §5.2).
+4. **The asset manifest as triple-duty artifact** — placement data (tier/mood/
+   scale), legal audit trail (author/license/source), and the Credits screen's
+   data source. One file keeps the CC0-first policy enforceable and visible.
+5. **Comfort as a cross-cutting gate.** `reduce_flashing`/`gentler_motion`
+   are checked at the effect sites (world glow, playhead pulse, sway), not in
+   the UI — new effects inherit the discipline by convention. Worth keeping
+   ruthless about as the modulation layer grows.
+
+## 3. Alignment with `idea.md`'s reference architecture
+
+| Layer (idea.md §4) | Target | Built | Gap |
+|---|---|---|---|
+| 1. Offline asset curation | normalize glb, tag, embed, signed manifest, 50–100 models | manifest + provenance, 7 CC0 models, raw 1k gltf | no normalization step (fine at 24 MB), no embeddings (M5), pack is a starter |
+| 2. Song pre-analysis | beats, mood, structure, stems | in-house DSP: tempo ±0.2%, beat grid, sections, energy, quadrant mood; cached | no ML mood (M5), no stems (M7 — live band proxy instead), single-song ahead-of-play only |
+| 3. Scene planner | rule mapper v1, later LLM recipes + CLAP selection | quadrant mapper + per-track pin | CLAP (M5), LLM (M7) — both explicitly optional tiers |
+| 4. Runtime assembler | SceneRoot spawn, WFC/Poisson placement, instancing, `VisibilityRange` LOD | glTF spawn + tiered golden-angle scatter | fixed counts (3/5/9), one placement pattern, **no LOD/instancing** — irrelevant at 16 props, required before dense packs |
+| 5. Continuous modulation | WGSL displacement, particles, eased keyframes, bar-quantized crossfades | emissive glow + UI pulse from live tap; palette morph | **the transition engine** — see §4 |
+
+Stage-0 legal policy (CC0-first, manifest, no Tier-C): followed exactly.
+Stage-1 vertical slice: functionally achieved, but its 60 fps @ 5k-instance
+validation threshold has **never been attempted** (current world ≈ 120
+entities). Treat that budget as an unvalidated claim, not a met one.
+
+## 4. The honest gap: the transition engine
+
+The design spec's most distinctive promises are temporal:
+
+- materialize: palette wash 0.8s → terrain rises 1.3–2.4s → **settles on the
+  first downbeat** (1g);
+- song → song: **6–10s crossfade landing on a section boundary** of the
+  incoming track; close moods morph in place (1h, 1r).
+
+M3 shipped the *data* for this (beat grid, downbeats, sections, per-track
+mood) and kira ships the *mechanism* (clocks, scheduled starts, tweens), but
+the wiring was never built: track changes today are a 300ms fade + instant
+world swap. This is the largest spec-vs-built divergence, it sits squarely on
+the product's identity, and it is now the cheapest high-value work in the
+plan — no new dependencies, no downloads, data already cached.
+
+## 5. Findings & risks (ranked)
+
+| # | Severity | Finding | Note |
+|---|---|---|---|
+| R1 | High (product) | No transition engine (§4) | Data + mechanism exist; wire A→B dual-stream crossfade scheduled on B's nearest section boundary + keyframed materialize against the beat grid |
+| R2 | High (process) | **Reverie is not in CI.** Monorepo CI builds `localgpt` workspace only; the standalone reverie workspace is never compiled/tested upstream | Add a CI job: build + clippy + fmt + `cargo test` (headless; no smoke) |
+| R3 | Med (structure) | `overlays.rs` = 1,737 lines (34% of app); `handle_buttons` takes 14 `ResMut`s and grows with every action | Split per-overlay modules; dispatch `ButtonAction` as a Bevy message/observer so handlers take only what they touch |
+| R4 | Med (structure) | Overlay state = 5 independent bools (`Paused`, `QueueOpen`, `SettingsOpen`, `CreditsOpen`, `LibraryOpen`) with hand-ordered Esc priority | Replace with one `enum OverlayStack` (or Bevy sub-states); Esc = pop |
+| R5 | Med (correctness-later) | Track identity is `PathBuf` (in-memory analysis map, `playing` key) + blake3 (sidecars). Fine today; queue reorder ("drag to reorder" is promised in the queue panel) and dedupe will want a stable `TrackId` | Introduce `TrackId(blake3)` on import; key everything on it |
+| R6 | Med (spec) | "Keep this world" pins **mood only**; PLAN §5.3 decided `{mood, seed}` but world generation takes no seed — "Build a different world" cycles mood instead of re-rolling layout | Add a layout seed to prop placement; store it in the pin |
+| R7 | Low (perf, deferred) | No `VisibilityRange`/instancing; placement counts hard-coded | Only matters when packs grow past ~hundreds of props; add with the next asset expansion |
+| R8 | Low (env) | GPU screenshot readback intermittently returns black frames on this machine (workaround: `REVERIE_ONESHOT` + retry) | Affects Photo mode UX too — consider a retry-on-black in `photo_capture` |
+| R9 | Low (packaging) | "Bundle at ship-time" has no implementing step; dev copy was manual | Add an `xtask bundle` (copy `reverie-assets/models` + fonts, build release) when distribution nears |
+| R10 | Low (docs) | PLAN marks M3 "done" though its crossfade exit criterion wasn't met (see §4) | This review is the correction; fold R1 into the next milestone |
+
+Non-findings worth recording: `bevy_audio` is *not* in Bevy 0.19's default
+features (no dead audio stack); the `Mutex<AudioManager>` pattern is
+appropriate (kira parks the cpal stream on its own thread; `AudioManager` is
+`Send`); JSON sidecars remain the right persistence at this scale.
+
+## 6. Decisions ahead (mini-ADRs)
+
+**D1 — Transition engine now, before more content.** Options: (a) wire
+crossfade+materialize next; (b) grow asset packs first. **Recommend (a)** —
+it is the product's differentiator, all inputs exist, and it de-risks the
+audio architecture (dual concurrent streams) before packs make worlds heavier.
+
+**D2 — Overlay refactor before the next screen.** Options: (a) keep booleans
+and grow `handle_buttons`; (b) `OverlayStack` enum + message-based actions.
+**Recommend (b)** at the *next* UI addition, not as a standalone rewrite —
+piggyback the refactor on real work.
+
+**D3 — M5 (CLAP) stays opt-in.** The quadrant mapper is deterministic,
+explainable, and shippable. Adopt CLAP only behind an `ml` feature with the
+mapper as fallback, per PLAN §1.2 — and only after D1, since selection quality
+matters less than transition feel.
+
+**D4 — CI now.** No options worth debating; a 20-line workflow job removes the
+only unprotected-regression surface in the monorepo.
+
+## 7. Action items
+
+1. [ ] R2/D4: add reverie job to `.github/workflows/ci.yml` (build, clippy,
+   fmt, test; no GPU steps)
+2. [ ] R1/D1: transition engine — dual-stream crossfade on kira clocks landing
+   on the incoming track's section boundary; keyframed materialize settling on
+   the first downbeat; close-mood morph-in-place path
+3. [ ] R6: layout seed in prop placement; extend pin to `{mood, seed}`;
+   "Build a different world" re-rolls the seed
+4. [ ] R3/R4/D2: `OverlayStack` + per-overlay modules + action messages (fold
+   into the next UI change)
+5. [ ] R5: `TrackId` keyed on content hash; unblock queue reorder
+6. [ ] R9: `xtask bundle` when distribution nears; R7 LOD with the next pack
