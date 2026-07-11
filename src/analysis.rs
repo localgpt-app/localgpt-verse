@@ -50,10 +50,12 @@ pub struct TrackAnalysis {
     pub energy: Vec<f32>,
     /// Mood index into [`crate::theme::MOODS`] from the quadrant mapping.
     pub mood: usize,
-    /// "Keep this world": a pinned mood that overrides `mood`. (A world seed
-    /// joins this once world generation takes one — PLAN.md §5.3.)
+    /// "Keep this world": a pinned mood that overrides `mood` (PLAN.md §5.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_mood: Option<usize>,
+    /// The pinned layout seed — with `pinned_mood`, the full world identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_seed: Option<u64>,
 }
 
 fn cache_dir() -> Option<PathBuf> {
@@ -451,6 +453,7 @@ fn analyze(path: &Path) -> Option<TrackAnalysis> {
         energy,
         mood,
         pinned_mood: None,
+        pinned_seed: None,
     })
 }
 
@@ -534,13 +537,15 @@ impl AnalysisStore {
 
     /// Toggle the "Keep this world" pin for `path` at `mood`. Returns the new
     /// pin state, or `None` when the track has no analysis yet.
-    pub fn toggle_pin(&mut self, path: &Path, mood: usize) -> Option<bool> {
+    pub fn toggle_pin(&mut self, path: &Path, mood: usize, seed: u64) -> Option<bool> {
         let analysis = self.map.get_mut(path)?;
         let pinned = if analysis.pinned_mood.is_some() {
             analysis.pinned_mood = None;
+            analysis.pinned_seed = None;
             false
         } else {
             analysis.pinned_mood = Some(mood);
+            analysis.pinned_seed = Some(seed);
             true
         };
         if let Some(key) = self.keys.get(path) {
@@ -559,6 +564,7 @@ pub fn sync_analysis(
     mut playback: ResMut<Playback>,
     mut beat: ResMut<Beat>,
     mut theme: ResMut<Theme>,
+    mut layout: ResMut<crate::world_assets::WorldLayout>,
     mut applied: Local<Option<(Option<PathBuf>, bool)>>,
 ) {
     if playback.queue.is_empty() {
@@ -602,6 +608,8 @@ pub fn sync_analysis(
     }
     *applied = Some((current_path.clone(), has));
 
+    // Per-track layout seed: the pin wins, else a deterministic default from
+    // the path (same song → same place until re-rolled).
     match current_path.as_ref().and_then(|p| store.map.get(p)) {
         Some(a) => {
             playback.sections = a.sections.clone();
@@ -613,14 +621,18 @@ pub fn sync_analysis(
                 beat.grid = false;
             }
             let mood = a.pinned_mood.unwrap_or(a.mood);
+            layout.seed = a
+                .pinned_seed
+                .unwrap_or_else(|| crate::world_assets::path_seed(current_path.as_ref().unwrap()));
             playback.queue[idx].mood = mood;
             theme.mood = mood;
         }
         None => {
             // Demo track (no path) keeps its authored mock sections; a real
             // file with analysis still pending shows a clean bar until it lands.
-            if current_path.is_some() {
+            if let Some(path) = &current_path {
                 playback.sections.clear();
+                layout.seed = crate::world_assets::path_seed(path);
             }
             beat.grid = false;
         }

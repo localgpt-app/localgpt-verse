@@ -68,6 +68,7 @@ pub fn handle_buttons(
     mut onboarding: ResMut<crate::Onboarding>,
     mut import: ResMut<crate::audio::ImportState>,
     mut analysis: ResMut<crate::analysis::AnalysisStore>,
+    mut layout: ResMut<crate::world_assets::WorldLayout>,
     playback: Res<Playback>,
     mut theme: ResMut<Theme>,
     mut exit: MessageWriter<AppExit>,
@@ -97,16 +98,21 @@ pub fn handle_buttons(
                 ButtonAction::OnboardNext => onboarding.step = onboarding.step.saturating_add(1),
                 ButtonAction::Resume => paused.0 = false,
                 ButtonAction::BuildWorld => {
-                    // "same song, a new place" — re-roll the world only.
+                    // "same song, a new place" — new palette and a re-rolled
+                    // layout seed (spec 1k).
                     theme.mood = (theme.mood + 1) % theme::MOODS.len();
+                    let mut state = layout.seed;
+                    crate::world_assets::splitmix(&mut state);
+                    layout.seed = state;
                 }
                 ButtonAction::KeepWorld => {
-                    // Pin the current mood to this track's analysis sidecar so
-                    // the song always returns to this world (spec 1k).
+                    // Pin the current world — mood + layout seed — to this
+                    // track's analysis sidecar so the song always returns
+                    // here (spec 1k, PLAN §5.3).
                     if !playback.queue.is_empty() {
                         let idx = playback.current % playback.queue.len();
                         if let Some(path) = playback.queue[idx].path.clone() {
-                            analysis.toggle_pin(&path, theme.mood);
+                            analysis.toggle_pin(&path, theme.mood, layout.seed);
                         }
                     }
                 }

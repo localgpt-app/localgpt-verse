@@ -153,6 +153,7 @@ fn main() {
     .init_resource::<audio::ImportState>()
     .init_resource::<analysis::AnalysisStore>()
     .init_resource::<world_assets::WorldAssets>()
+    .init_resource::<world_assets::WorldLayout>()
     // Setup.
     .add_systems(
         Startup,

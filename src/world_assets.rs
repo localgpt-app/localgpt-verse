@@ -94,6 +94,44 @@ pub struct WorldAssets {
     pub manifest: Option<AssetManifest>,
 }
 
+/// The current world layout seed. Same (mood, seed) → same placement; "Build
+/// a different world" re-rolls it and "Keep this world" pins it per track
+/// (ARCHITECTURE R6).
+#[derive(Resource)]
+pub struct WorldLayout {
+    pub seed: u64,
+}
+
+impl Default for WorldLayout {
+    fn default() -> Self {
+        Self { seed: 0x5EED }
+    }
+}
+
+/// splitmix64 — tiny deterministic PRNG (no `rand` dependency).
+pub(crate) fn splitmix(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E3779B97F4A7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z ^ (z >> 31)
+}
+
+/// Uniform f32 in [0, 1).
+fn rand01(state: &mut u64) -> f32 {
+    (splitmix(state) >> 40) as f32 / (1u64 << 24) as f32
+}
+
+/// Deterministic per-track default seed (from the path, like `path_mood`).
+pub(crate) fn path_seed(path: &std::path::Path) -> u64 {
+    path.as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .fold(0xC0FFEE_u64, |acc, &b| {
+            acc.wrapping_mul(31).wrapping_add(b as u64)
+        })
+}
+
 /// Marker for spawned prop entities, so a mood change can clear them.
 #[derive(Component)]
 pub struct WorldProp;
@@ -181,19 +219,20 @@ pub fn load_asset_manifest(mut commands: Commands) {
 #[allow(clippy::too_many_arguments)]
 pub fn populate_world_props(
     theme: Res<Theme>,
+    layout: Res<WorldLayout>,
     assets: Res<WorldAssets>,
     asset_server: Res<AssetServer>,
     analysis: Res<crate::analysis::AnalysisStore>,
     playback: Res<crate::playback::Playback>,
     mut commands: Commands,
     existing: Query<Entity, With<WorldProp>>,
-    mut last_mood: Local<Option<usize>>,
+    mut last: Local<Option<(usize, u64)>>,
 ) {
     let mood = theme.mood % crate::theme::MOODS.len();
-    if *last_mood == Some(mood) {
+    if *last == Some((mood, layout.seed)) {
         return;
     }
-    *last_mood = Some(mood);
+    *last = Some((mood, layout.seed));
 
     for e in &existing {
         commands.entity(e).despawn();
@@ -215,8 +254,11 @@ pub fn populate_world_props(
     let entries: Vec<_> = manifest.assets.iter().filter(|a| a.mood == mood).collect();
     let total: usize = entries.iter().map(|e| e.tier.count()).sum();
 
-    // Deterministic golden-angle scatter on the ground plane (top at y=-0.5).
+    // Seeded golden-angle scatter on the ground plane (top at y=-0.5): the
+    // spiral guarantees coverage, the seeded jitter makes each layout its own
+    // place. Same (mood, seed) → identical world.
     let golden = 2.399_963_f32;
+    let mut rng = layout.seed ^ (mood as u64).wrapping_mul(0x9E37_79B9);
     let mut placed = 0usize;
     for entry in entries {
         let handle: Handle<_> = asset_server
@@ -224,15 +266,18 @@ pub fn populate_world_props(
         let scale = entry.scale * entry.tier.base_scale();
         for _ in 0..entry.tier.count() {
             let fi = placed as f32;
-            let ang = fi * golden;
-            let radius = 6.0 + (fi + 2.0).sqrt() * 4.2;
+            let ang = fi * golden + (rand01(&mut rng) - 0.5) * 0.9;
+            let radius = 6.0 + (fi + 2.0).sqrt() * 4.2 + (rand01(&mut rng) - 0.5) * 3.0;
             let pos = Vec3::new(ang.cos() * radius, -0.5, ang.sin() * radius);
+            let scale = scale * (0.85 + rand01(&mut rng) * 0.3);
             commands.spawn((
                 WorldProp,
                 WorldAssetRoot(handle.clone()),
                 Transform::from_translation(pos)
                     .with_scale(Vec3::splat(scale * 0.01))
-                    .with_rotation(Quat::from_rotation_y(ang * 1.7)),
+                    .with_rotation(Quat::from_rotation_y(
+                        rand01(&mut rng) * std::f32::consts::TAU,
+                    )),
                 PropRise {
                     delay: stagger_delay(placed, total, settle),
                     dur: RISE_SECS,
@@ -275,5 +320,24 @@ mod tests {
         // A settle earlier than one rise can finish still yields a sane delay.
         let d = stagger_delay(3, 4, 0.5);
         assert!(d >= FIRST_DELAY);
+    }
+
+    #[test]
+    fn seeded_layout_is_deterministic() {
+        let (mut a, mut b) = (42u64, 42u64);
+        for _ in 0..8 {
+            assert_eq!(splitmix(&mut a), splitmix(&mut b));
+        }
+        let mut s = 7u64;
+        for _ in 0..100 {
+            let v = rand01(&mut s);
+            assert!((0.0..1.0).contains(&v));
+        }
+        let p = std::path::Path::new("/music/a.flac");
+        assert_eq!(path_seed(p), path_seed(p));
+        assert_ne!(
+            path_seed(p),
+            path_seed(std::path::Path::new("/music/b.flac"))
+        );
     }
 }
