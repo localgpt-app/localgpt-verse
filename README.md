@@ -25,6 +25,14 @@ Opens a window titled **Reverie**. You start in a three-step onboarding
 (photosensitivity → controls → import); click through it, or *Skip setup* /
 press **Enter** to jump straight into a world.
 
+**Real playback (PLAN.md M1):** *Choose your music folder…* scans a folder
+(MP3/FLAC/WAV/OGG/M4A/AIFF), replaces the demo queue with your tracks, and
+plays them through kira/symphonia — the HUD clock, progress bar, and queue
+follow the actual audio, pause audibly holds its breath, and track ends
+advance the world. Without an import (or an audio device) the app falls back
+to the silent simulated transport. Dev shortcut: `REVERIE_IMPORT=<dir>`
+imports at startup without the picker.
+
 ### Controls
 
 | Key | Action |
@@ -32,6 +40,7 @@ press **Enter** to jump straight into a world.
 | `W A S D` + mouse | Move / look (Explore mode) |
 | `F` / click tabs | Toggle Explore / Drift camera |
 | `E` | Send a pulse |
+| `N` | Next track |
 | `Tab` | Open / close the queue |
 | `L` | Open / close the library (pick a world) |
 | `Esc` | Pause (world time-dilates) · resume · close the top overlay |

@@ -5,6 +5,7 @@
 //! and asset-assembly pipeline described in `idea.md` comes later; for now the
 //! transport and beat are simulated (see [`playback`]).
 
+mod audio;
 mod hud;
 mod overlays;
 mod playback;
@@ -99,6 +100,11 @@ pub struct Comfort {
     pub gentler_motion: bool,
 }
 
+/// True while a real audio stream owns the transport clock (see `audio.rs`).
+/// When false, `playback::advance_playback` simulates it.
+#[derive(Resource, Default)]
+pub struct AudioActive(pub bool);
+
 /// The world's timescale (1.0 playing, eases to ~0.05 when paused).
 #[derive(Resource)]
 pub struct WorldClock {
@@ -138,8 +144,14 @@ fn main() {
     .init_resource::<WorldIntensity>()
     .init_resource::<Comfort>()
     .init_resource::<WorldClock>()
+    .init_resource::<AudioActive>()
+    .init_resource::<audio::AudioPlayer>()
+    .init_resource::<audio::ImportState>()
     // Setup.
-    .add_systems(Startup, world::setup_world)
+    .add_systems(
+        Startup,
+        (world::setup_world, audio::init_audio, auto_import),
+    )
     .add_systems(OnEnter(AppState::FirstRun), overlays::spawn_first_run)
     .add_systems(OnExit(AppState::FirstRun), overlays::despawn_first_run)
     .add_systems(OnEnter(AppState::InWorld), hud::setup_hud)
@@ -156,6 +168,20 @@ fn main() {
     .add_systems(
         Update,
         (input_first_run, overlays::refresh_onboarding).run_if(in_state(AppState::FirstRun)),
+    )
+    // Audio: the import poll runs everywhere (the scan can start during
+    // onboarding); the player syncs only in-world ("audio starts at 0s" on
+    // materialize). Chained — each stage feeds the next within a frame.
+    .add_systems(Update, audio::poll_import)
+    .add_systems(
+        Update,
+        (
+            audio::sync_track_playback,
+            audio::sync_pause,
+            audio::sync_clock,
+        )
+            .chain()
+            .run_if(in_state(AppState::InWorld)),
     )
     .add_systems(
         Update,
@@ -319,6 +345,14 @@ fn not_paused(paused: Res<Paused>) -> bool {
     !paused.0
 }
 
+/// Dev/smoke hook: `REVERIE_IMPORT=<dir>` imports a folder at startup,
+/// skipping the folder picker.
+fn auto_import(mut import: ResMut<audio::ImportState>) {
+    if let Ok(dir) = std::env::var("REVERIE_IMPORT") {
+        audio::start_import(std::path::PathBuf::from(dir), &mut import);
+    }
+}
+
 /// Photo mode: force the HUD hidden, then capture a clean screenshot to
 /// `reverie-photos/`. Runs for a few frames so the chrome fully fades first.
 fn photo_capture(
@@ -387,6 +421,7 @@ fn input_in_world(
     mut activity: ResMut<HudActivity>,
     mut beat: ResMut<Beat>,
     mut playback: ResMut<Playback>,
+    mut theme: ResMut<Theme>,
     mut intensity: ResMut<WorldIntensity>,
 ) {
     let mut wake = keys.get_just_pressed().len() > 0 || motion.delta != Vec2::ZERO;
@@ -418,6 +453,11 @@ fn input_in_world(
     }
     if keys.just_pressed(KeyCode::KeyE) {
         beat.pulse = 1.0;
+    }
+    if keys.just_pressed(KeyCode::KeyN) {
+        // Next track (the audio player follows `current` and fades over).
+        let mood = playback.advance();
+        theme.mood = mood;
     }
     if keys.just_pressed(KeyCode::KeyF) {
         *mode = match *mode {

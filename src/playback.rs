@@ -5,19 +5,38 @@
 //! beat phase, and a slow energy envelope. The UI reads these resources so the
 //! HUD is already wired to react to music.
 
+use std::path::PathBuf;
+
 use bevy::prelude::*;
 
 /// One track in the queue.
 #[derive(Clone)]
 pub struct Track {
-    pub title: &'static str,
-    pub artist: &'static str,
+    pub title: String,
+    pub artist: String,
     /// Duration in seconds.
     pub duration: f32,
     /// Index into [`crate::theme::MOODS`] — the world this song imagines.
     pub mood: usize,
     /// Section label shown under the title, e.g. "Cascade Hour · Slow Light".
-    pub section: &'static str,
+    pub section: String,
+    /// Audio file on disk. `None` for the built-in demo tracks — those play
+    /// silently on the simulated clock.
+    pub path: Option<PathBuf>,
+}
+
+impl Track {
+    /// A demo track (no file) for the built-in queue.
+    fn demo(title: &str, artist: &str, duration: f32, mood: usize, section: &str) -> Self {
+        Self {
+            title: title.into(),
+            artist: artist.into(),
+            duration,
+            mood,
+            section: section.into(),
+            path: None,
+        }
+    }
 }
 
 /// The transport: what is playing, where we are, and what's next.
@@ -35,57 +54,40 @@ pub struct Playback {
 
 impl Default for Playback {
     fn default() -> Self {
-        // Sample queue drawn from the spec mockups (1a / 1l).
+        // Sample queue drawn from the spec mockups (1a / 1l); replaced by the
+        // user's own music on import (see `audio::poll_import`).
         let queue = vec![
-            Track {
-                title: "Amber Waking",
-                artist: "Cascade Hour",
-                duration: 243.0,
-                mood: 0,
-                section: "Cascade Hour · Slow Light",
-            },
-            Track {
-                title: "Night Bloom",
-                artist: "Lys",
-                duration: 227.0,
-                mood: 2,
-                section: "Chrome Gardens · Rising",
-            },
-            Track {
-                title: "Glass Runner",
-                artist: "Nova Dusk",
-                duration: 202.0,
-                mood: 3,
-                section: "Auto Camera · Slow Orbit",
-            },
-            Track {
-                title: "Static Bloom",
-                artist: "Vel",
-                duration: 195.0,
-                mood: 1,
-                section: "Velvet Circuit · Surge",
-            },
-            Track {
-                title: "Undertow",
-                artist: "Saltwater Choir",
-                duration: 311.0,
-                mood: 2,
-                section: "Tide Gardens · Ebb",
-            },
-            Track {
-                title: "Low Sun",
-                artist: "Miren",
-                duration: 280.0,
-                mood: 0,
-                section: "Ember Flats · Dusk",
-            },
-            Track {
-                title: "Hollow Light",
-                artist: "The Quiet Party",
-                duration: 232.0,
-                mood: 3,
-                section: "Glass Expanse · Late",
-            },
+            Track::demo(
+                "Amber Waking",
+                "Cascade Hour",
+                243.0,
+                0,
+                "Cascade Hour · Slow Light",
+            ),
+            Track::demo("Night Bloom", "Lys", 227.0, 2, "Chrome Gardens · Rising"),
+            Track::demo(
+                "Glass Runner",
+                "Nova Dusk",
+                202.0,
+                3,
+                "Auto Camera · Slow Orbit",
+            ),
+            Track::demo("Static Bloom", "Vel", 195.0, 1, "Velvet Circuit · Surge"),
+            Track::demo(
+                "Undertow",
+                "Saltwater Choir",
+                311.0,
+                2,
+                "Tide Gardens · Ebb",
+            ),
+            Track::demo("Low Sun", "Miren", 280.0, 0, "Ember Flats · Dusk"),
+            Track::demo(
+                "Hollow Light",
+                "The Quiet Party",
+                232.0,
+                3,
+                "Glass Expanse · Late",
+            ),
         ];
         Self {
             elapsed: 161.0, // 2:41, matching the hero mockup
@@ -150,8 +152,13 @@ impl Default for Beat {
 }
 
 /// Advance the transport and synthesise the beat/energy signals.
+///
+/// While a real audio stream is live (`AudioActive`), the audio clock in
+/// `audio.rs` owns `elapsed` and end-of-track; only the beat/energy
+/// simulation runs here (replaced by real analysis in PLAN.md M2/M3).
 pub fn advance_playback(
     time: Res<Time>,
+    audio_active: Res<crate::AudioActive>,
     mut playback: ResMut<Playback>,
     mut beat: ResMut<Beat>,
     mut theme: ResMut<crate::theme::Theme>,
@@ -180,7 +187,10 @@ pub fn advance_playback(
     }
     beat.pulse = (beat.pulse - dt * 4.0).max(0.0);
 
-    // Transport.
+    // Transport — simulated only while no real stream owns the clock.
+    if audio_active.0 {
+        return;
+    }
     playback.elapsed += dt;
     if playback.elapsed >= playback.duration() {
         let mood = playback.advance();

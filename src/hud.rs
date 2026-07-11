@@ -189,7 +189,7 @@ pub fn setup_hud(
                 ));
                 col.spawn((
                     TrackTitleText,
-                    Text::new(track.title),
+                    Text::new(track.title.clone()),
                     text_font(fonts.ui_medium.clone(), 15.0),
                     TextColor(theme::TEXT_DIM),
                     Fade {
@@ -200,7 +200,7 @@ pub fn setup_hud(
                 ));
                 col.spawn((
                     SectionText,
-                    Text::new(track.section),
+                    Text::new(track.section.clone()),
                     text_font(fonts.ui.clone(), 12.0),
                     TextColor(theme::text_muted()),
                     Fade {
@@ -650,10 +650,10 @@ pub fn update_hud_content(
         *t = Text::new(theme.current().world_name);
     }
     if let Ok(mut t) = sets.p1().single_mut() {
-        *t = Text::new(track.title);
+        *t = Text::new(track.title.clone());
     }
     if let Ok(mut t) = sets.p2().single_mut() {
-        *t = Text::new(track.section);
+        *t = Text::new(track.section.clone());
     }
     if let Ok(mut t) = sets.p3().single_mut() {
         *t = Text::new(fmt_time(playback.elapsed));

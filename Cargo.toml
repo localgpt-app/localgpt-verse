@@ -13,6 +13,14 @@ description = "Reverie — a desktop app that imagines a 3D world for every song
 [dependencies]
 bevy = "0.19"
 
+# M1 — real playback core (see PLAN.md §1.1)
+# mixer on cpal: precise clocks, tweens, streaming symphonia decode.
+# Extra format features cover the onboarding promise (AIFF) + common .m4a/.aac.
+kira = { version = "0.12", features = ["aiff", "aac", "isomp4", "alac"] }
+lofty = "0.24"    # tag + duration reading for the library scan
+rfd = "0.17"      # native folder picker ("Choose your music folder…")
+walkdir = "2"     # library scan
+
 # Bevy's recommended dev profile: optimize dependencies but keep fast rebuilds
 # of our own crate.
 [profile.dev]

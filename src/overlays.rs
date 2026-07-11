@@ -66,13 +66,26 @@ pub fn handle_buttons(
     mut comfort: ResMut<Comfort>,
     mut photo: ResMut<crate::Photo>,
     mut onboarding: ResMut<crate::Onboarding>,
+    mut import: ResMut<crate::audio::ImportState>,
     mut theme: ResMut<Theme>,
     mut exit: MessageWriter<AppExit>,
 ) {
     for (interaction, button, mut bg) in &mut interactions {
         match *interaction {
             Interaction::Pressed => match button.action {
-                ButtonAction::Start | ButtonAction::Skip => next_state.set(AppState::InWorld),
+                ButtonAction::Start => {
+                    // Native folder picker (blocks the main thread while the
+                    // modal is open — required on macOS anyway). Cancelling
+                    // stays on the onboarding; "Skip for now" is the way past.
+                    if let Some(folder) = rfd::FileDialog::new()
+                        .set_title("Choose your music folder")
+                        .pick_folder()
+                    {
+                        crate::audio::start_import(folder, &mut import);
+                        next_state.set(AppState::InWorld);
+                    }
+                }
+                ButtonAction::Skip => next_state.set(AppState::InWorld),
                 ButtonAction::StartGentle => {
                     comfort.reduce_flashing = true;
                     comfort.gentler_motion = true;
@@ -475,7 +488,7 @@ fn spawn_pause(
                     height: Val::Px(4.0),
                     ..default()
                 });
-                label_text(card, fonts, track.title, 30.0, TEXT, true);
+                label_text(card, fonts, &track.title, 30.0, TEXT, true);
                 label_text(
                     card,
                     fonts,
@@ -758,8 +771,8 @@ fn spawn_queue(commands: &mut Commands, fonts: &Fonts, theme: &Theme, playback: 
                     panel,
                     fonts,
                     tag,
-                    track.title,
-                    track.artist,
+                    &track.title,
+                    &track.artist,
                     fmt_time(track.duration),
                     i == 0,
                 );
