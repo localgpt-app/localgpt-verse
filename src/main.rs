@@ -58,6 +58,10 @@ pub struct SettingsOpen(pub bool);
 #[derive(Resource, Default)]
 pub struct CreditsOpen(pub bool);
 
+/// Whether the library/home overlay is open.
+#[derive(Resource, Default)]
+pub struct LibraryOpen(pub bool);
+
 /// Photo mode: frames to wait (HUD hidden) before capturing a clean shot.
 #[derive(Resource, Default)]
 pub struct Photo {
@@ -128,6 +132,7 @@ fn main() {
     .init_resource::<QueueOpen>()
     .init_resource::<SettingsOpen>()
     .init_resource::<CreditsOpen>()
+    .init_resource::<LibraryOpen>()
     .init_resource::<Photo>()
     .init_resource::<Onboarding>()
     .init_resource::<WorldIntensity>()
@@ -171,10 +176,13 @@ fn main() {
             hud::update_mode_tabs,
             hud::update_reticle,
             hud::mode_tab_clicks,
+            hud::chip_clicks,
             overlays::sync_pause_overlay,
             overlays::sync_queue_overlay,
             overlays::sync_settings_overlay,
             overlays::sync_credits_overlay,
+            overlays::sync_library_overlay,
+            overlays::handle_world_cards,
             overlays::update_intensity_knob,
             overlays::update_comfort_toggles,
         )
@@ -209,6 +217,7 @@ fn smoke_drive(
     mut paused: ResMut<Paused>,
     mut settings_open: ResMut<SettingsOpen>,
     mut credits_open: ResMut<CreditsOpen>,
+    mut library_open: ResMut<LibraryOpen>,
     mut comfort: ResMut<Comfort>,
     mut photo: ResMut<Photo>,
     mut onboarding: ResMut<Onboarding>,
@@ -247,44 +256,52 @@ fn smoke_drive(
         *phase = 4;
         shot(&mut commands, &dir, "reverie-hud.png");
     }
-    if t > 3.4 {
+    if t > 3.3 {
+        library_open.0 = true; // spawns the library
+    }
+    if t > 3.9 && *phase == 4 {
+        *phase = 5;
+        shot(&mut commands, &dir, "reverie-library.png");
+        library_open.0 = false;
+    }
+    if t > 4.3 {
         queue_open.0 = true; // spawns the queue panel
     }
-    if t > 3.8 {
+    if t > 4.7 {
         paused.0 = true; // spawns the pause overlay
     }
-    if t > 4.4 && *phase == 4 {
-        *phase = 5;
+    if t > 5.3 && *phase == 5 {
+        *phase = 6;
         shot(&mut commands, &dir, "reverie-overlays.png");
     }
-    if t > 4.8 {
+    if t > 5.7 {
         queue_open.0 = false;
         paused.0 = false; // Settings lifts pause (as the real button does)
         settings_open.0 = true;
         comfort.reduce_flashing = true; // show a toggle in the "on" state
     }
-    if t > 5.4 && *phase == 5 {
-        *phase = 6;
+    if t > 6.3 && *phase == 6 {
+        *phase = 7;
         shot(&mut commands, &dir, "reverie-settings.png");
     }
-    if t > 5.8 {
+    if t > 6.7 {
         credits_open.0 = true;
     }
-    if t > 6.4 && *phase == 6 {
-        *phase = 7;
+    if t > 7.3 && *phase == 7 {
+        *phase = 8;
         shot(&mut commands, &dir, "reverie-credits.png");
     }
-    if t > 6.6 {
+    if t > 7.5 {
         credits_open.0 = false;
         settings_open.0 = false;
     }
     // Request the photo only once the chrome has been closed for a while, so
     // the capture lands on a stable, clean frame.
-    if t > 7.4 && *phase == 7 {
-        *phase = 8;
+    if t > 8.3 && *phase == 8 {
+        *phase = 9;
         photo.request();
     }
-    if t > 8.4 {
+    if t > 9.3 {
         exit.write(AppExit::Success);
     }
 }
@@ -364,6 +381,7 @@ fn input_in_world(
     mut queue_open: ResMut<QueueOpen>,
     mut settings_open: ResMut<SettingsOpen>,
     mut credits_open: ResMut<CreditsOpen>,
+    mut library_open: ResMut<LibraryOpen>,
     mut photo: ResMut<Photo>,
     mut mode: ResMut<CameraMode>,
     mut activity: ResMut<HudActivity>,
@@ -379,6 +397,8 @@ fn input_in_world(
             credits_open.0 = false;
         } else if settings_open.0 {
             settings_open.0 = false;
+        } else if library_open.0 {
+            library_open.0 = false;
         } else {
             paused.0 = !paused.0;
             playback.playing = !paused.0;
@@ -386,6 +406,9 @@ fn input_in_world(
     }
     if keys.just_pressed(KeyCode::Tab) {
         queue_open.0 = !queue_open.0;
+    }
+    if keys.just_pressed(KeyCode::KeyL) {
+        library_open.0 = !library_open.0;
     }
     if keys.just_pressed(KeyCode::KeyH) {
         // Jump straight to Hidden.

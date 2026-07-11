@@ -33,6 +33,7 @@ press **Enter** to jump straight into a world.
 | `F` / click tabs | Toggle Explore / Drift camera |
 | `E` | Send a pulse |
 | `Tab` | Open / close the queue |
+| `L` | Open / close the library (pick a world) |
 | `Esc` | Pause (world time-dilates) · resume · close the top overlay |
 | `H` | Hide the HUD now |
 | `P` | Photo mode — hide the chrome and save a shot to `reverie-photos/` |
@@ -53,7 +54,8 @@ current world's palette.
   the three-depth fade behaviour.
 - **Overlays** (`src/overlays.rs`) — three-step **onboarding** (photosensitivity
   → controls → import), pause (with world-intensity slider), slide-in queue,
-  **Settings** (Comfort group with working toggles), and **Credits & Licenses**.
+  **Settings** (Comfort group with working toggles), **Credits & Licenses**, and
+  a **Library** that shows the world moods as selectable cards (`L`).
 - **Comfort** — *Reduce flashing* holds the world glow steady (no beat pulse) and
   caps UI pulses; *Gentler world motion* damps the sway. Both apply instantly.
 - **Photo mode** (`P` or the pause button) — clears the chrome and saves a clean
@@ -62,8 +64,8 @@ current world's palette.
   with HDR + bloom, Explore/Drift cameras, and pause time-dilation, so the HUD
   always overlays a live world.
 
-Not yet built (follow-ups): the Library/Home screen, and the non-Comfort
-settings groups (display-only for now); real audio + MIR; asset assembly.
+Not yet built (follow-ups): the non-Comfort settings groups (display-only for
+now); real audio + MIR; asset assembly.
 
 ## Fonts
 

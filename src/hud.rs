@@ -111,6 +111,16 @@ pub(crate) struct Reticle;
 #[derive(Component)]
 struct HudRoot;
 
+/// Which corner chip — used to route clicks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ChipKind {
+    Library,
+    Queue,
+}
+
+#[derive(Component)]
+pub(crate) struct HudChip(ChipKind);
+
 // A pill/rounded Node helper (border_radius is a Node field in 0.19).
 fn rounded(mut node: Node, radius: f32) -> Node {
     node.border_radius = BorderRadius::all(Val::Px(radius));
@@ -152,8 +162,8 @@ pub fn setup_hud(
                 ..default()
             })
             .with_children(|row| {
-                chip(row, &fonts, "‹  Library", "L");
-                chip(row, &fonts, "Queue", "Tab");
+                chip(row, &fonts, "‹  Library", "L", ChipKind::Library);
+                chip(row, &fonts, "Queue", "Tab", ChipKind::Queue);
             });
 
             // --- Bottom-left now-playing cluster -----------------------------
@@ -405,9 +415,17 @@ pub fn setup_hud(
 }
 
 /// A small corner chip: `label` + a keycap.
-fn chip(parent: &mut ChildSpawnerCommands<'_>, fonts: &Fonts, label: &str, key: &str) {
+fn chip(
+    parent: &mut ChildSpawnerCommands<'_>,
+    fonts: &Fonts,
+    label: &str,
+    key: &str,
+    kind: ChipKind,
+) {
     parent
         .spawn((
+            HudChip(kind),
+            Button,
             rounded(
                 Node {
                     align_items: AlignItems::Center,
@@ -715,6 +733,22 @@ pub fn mode_tab_clicks(
     for (tab, interaction) in &q {
         if *interaction == Interaction::Pressed {
             *mode = tab.0;
+        }
+    }
+}
+
+/// Clicking a corner chip toggles its panel (Library / Queue).
+pub fn chip_clicks(
+    mut library_open: ResMut<crate::LibraryOpen>,
+    mut queue_open: ResMut<crate::QueueOpen>,
+    q: Query<(&HudChip, &Interaction), Changed<Interaction>>,
+) {
+    for (chip, interaction) in &q {
+        if *interaction == Interaction::Pressed {
+            match chip.0 {
+                ChipKind::Library => library_open.0 = !library_open.0,
+                ChipKind::Queue => queue_open.0 = !queue_open.0,
+            }
         }
     }
 }
