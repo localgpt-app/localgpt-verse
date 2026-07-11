@@ -187,3 +187,46 @@ pub fn advance_playback(
         theme.mood = mood;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    // Tests tweak a couple of fields on the default (queue-building) transport.
+    #![allow(clippy::field_reassign_with_default)]
+    use super::*;
+
+    #[test]
+    fn fmt_time_formats_and_clamps() {
+        assert_eq!(fmt_time(0.0), "0:00");
+        assert_eq!(fmt_time(65.0), "1:05");
+        assert_eq!(fmt_time(161.0), "2:41");
+        assert_eq!(fmt_time(243.0), "4:03");
+        assert_eq!(fmt_time(-5.0), "0:00");
+    }
+
+    #[test]
+    fn fraction_is_clamped_0_to_1() {
+        let mut p = Playback::default();
+        p.elapsed = 0.0;
+        assert_eq!(p.fraction(), 0.0);
+        p.elapsed = p.duration() * 2.0;
+        assert_eq!(p.fraction(), 1.0);
+    }
+
+    #[test]
+    fn advance_wraps_and_resets_elapsed() {
+        let mut p = Playback::default();
+        p.current = p.queue.len() - 1;
+        p.elapsed = 99.0;
+        let mood = p.advance();
+        assert_eq!(p.current, 0);
+        assert_eq!(p.elapsed, 0.0);
+        assert_eq!(mood, p.queue[0].mood);
+    }
+
+    #[test]
+    fn next_track_wraps_to_first() {
+        let mut p = Playback::default();
+        p.current = p.queue.len() - 1;
+        assert_eq!(p.next_track().title, p.queue[0].title);
+    }
+}

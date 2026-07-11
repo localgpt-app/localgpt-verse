@@ -183,3 +183,21 @@ impl Theme {
         self.current().accent
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_theme_is_first_mood() {
+        let t = Theme::default();
+        assert_eq!(t.mood, 0);
+        assert_eq!(t.accent(), MOODS[0].accent);
+    }
+
+    #[test]
+    fn mood_index_wraps() {
+        let t = Theme { mood: MOODS.len() };
+        assert_eq!(t.current().world_name, MOODS[0].world_name);
+    }
+}
