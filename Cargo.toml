@@ -1,0 +1,22 @@
+[package]
+name = "reverie"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Reverie — placeholder Bevy application"
+
+# Standalone workspace: keeps Reverie out of the main localgpt workspace build
+# and CI (which target `crates/*`). Mirrors how `apps/` holds separate native
+# client projects rather than main-workspace members.
+[workspace]
+
+[dependencies]
+bevy = "0.19"
+
+# Bevy's recommended dev profile: optimize dependencies but keep fast rebuilds
+# of our own crate.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
