@@ -57,6 +57,7 @@ pub fn handle_buttons(
     mut settings_open: ResMut<SettingsOpen>,
     mut credits_open: ResMut<CreditsOpen>,
     mut comfort: ResMut<Comfort>,
+    mut photo: ResMut<crate::Photo>,
     mut theme: ResMut<Theme>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -70,7 +71,13 @@ pub fn handle_buttons(
                     theme.mood = (theme.mood + 1) % theme::MOODS.len();
                 }
                 ButtonAction::KeepWorld => { /* pin — no-op in this milestone */ }
-                ButtonAction::PhotoMode => { /* reserved */ }
+                ButtonAction::PhotoMode => {
+                    // Clear the chrome (incl. this pause overlay) and capture.
+                    photo.request();
+                    paused.0 = false;
+                    settings_open.0 = false;
+                    credits_open.0 = false;
+                }
                 ButtonAction::OpenSettings => {
                     // Opens over the world; leave pause behind it.
                     paused.0 = false;

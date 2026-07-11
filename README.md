@@ -29,11 +29,12 @@ Opens a window titled **Reverie**. You start on the first-run screen; press
 | Key | Action |
 |-----|--------|
 | `W A S D` + mouse | Move / look (Explore mode) |
-| `F` | Toggle Explore / Drift camera |
+| `F` / click tabs | Toggle Explore / Drift camera |
 | `E` | Send a pulse |
 | `Tab` | Open / close the queue |
-| `Esc` | Pause (world time-dilates) · resume |
+| `Esc` | Pause (world time-dilates) · resume · close the top overlay |
 | `H` | Hide the HUD now |
+| `P` | Photo mode — hide the chrome and save a shot to `reverie-photos/` |
 | `←` / `→` | Adjust world intensity (while paused) |
 
 The HUD follows the spec's "one system, three states": **Visible** while you're
@@ -54,6 +55,8 @@ current world's palette.
   **Credits & Licenses**.
 - **Comfort** — *Reduce flashing* holds the world glow steady (no beat pulse) and
   caps UI pulses; *Gentler world motion* damps the sway. Both apply instantly.
+- **Photo mode** (`P` or the pause button) — clears the chrome and saves a clean
+  screenshot of the world to `reverie-photos/`.
 - **Placeholder world** (`src/world.rs`) — a mood-tinted field of drifting shapes
   with HDR + bloom, Explore/Drift cameras, and pause time-dilation, so the HUD
   always overlays a live world.

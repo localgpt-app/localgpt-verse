@@ -58,6 +58,20 @@ pub struct SettingsOpen(pub bool);
 #[derive(Resource, Default)]
 pub struct CreditsOpen(pub bool);
 
+/// Photo mode: frames to wait (HUD hidden) before capturing a clean shot.
+#[derive(Resource, Default)]
+pub struct Photo {
+    pub pending: Option<u8>,
+}
+
+impl Photo {
+    /// Request a photo — the HUD hides and a screenshot lands a few frames
+    /// later (enough for the chrome to clear and the frame to settle).
+    pub fn request(&mut self) {
+        self.pending = Some(8);
+    }
+}
+
 /// World-intensity slider value (0..1), shown in the pause overlay.
 #[derive(Resource)]
 pub struct WorldIntensity(pub f32);
@@ -108,6 +122,7 @@ fn main() {
     .init_resource::<QueueOpen>()
     .init_resource::<SettingsOpen>()
     .init_resource::<CreditsOpen>()
+    .init_resource::<Photo>()
     .init_resource::<WorldIntensity>()
     .init_resource::<Comfort>()
     .init_resource::<WorldClock>()
@@ -145,6 +160,7 @@ fn main() {
             hud::update_hud_content,
             hud::update_mode_tabs,
             hud::update_reticle,
+            hud::mode_tab_clicks,
             overlays::sync_pause_overlay,
             overlays::sync_queue_overlay,
             overlays::sync_settings_overlay,
@@ -153,7 +169,8 @@ fn main() {
             overlays::update_comfort_toggles,
         )
             .run_if(in_state(AppState::InWorld)),
-    );
+    )
+    .add_systems(Update, photo_capture.run_if(in_state(AppState::InWorld)));
 
     // Fonts must exist before any schedule runs: some `OnEnter` systems read
     // them, and the state machine's initial transition fires before a
@@ -183,6 +200,7 @@ fn smoke_drive(
     mut settings_open: ResMut<SettingsOpen>,
     mut credits_open: ResMut<CreditsOpen>,
     mut comfort: ResMut<Comfort>,
+    mut photo: ResMut<Photo>,
     mut exit: MessageWriter<AppExit>,
     mut commands: Commands,
     mut phase: Local<u8>,
@@ -224,7 +242,17 @@ fn smoke_drive(
         *phase = 4;
         shot(&mut commands, &dir, "reverie-credits.png");
     }
-    if t > 5.1 {
+    if t > 4.9 {
+        credits_open.0 = false;
+        settings_open.0 = false;
+    }
+    // Request the photo only once the chrome has been closed for a while, so
+    // the capture lands on a stable, clean frame.
+    if t > 5.7 && *phase == 4 {
+        *phase = 5;
+        photo.request();
+    }
+    if t > 6.6 {
         exit.write(AppExit::Success);
     }
 }
@@ -240,6 +268,45 @@ fn shot(commands: &mut Commands, dir: &Option<String>, name: &str) {
 
 fn not_paused(paused: Res<Paused>) -> bool {
     !paused.0
+}
+
+/// Photo mode: force the HUD hidden, then capture a clean screenshot to
+/// `reverie-photos/`. Runs for a few frames so the chrome fully fades first.
+fn photo_capture(
+    mut photo: ResMut<Photo>,
+    mut activity: ResMut<HudActivity>,
+    mut commands: Commands,
+) {
+    let Some(n) = photo.pending else {
+        return;
+    };
+    // Snap the HUD fully hidden for a clean frame.
+    activity.idle = 100.0;
+    activity.force_visible = false;
+    activity.full = 0.0;
+    activity.minimal = 0.0;
+
+    if n == 0 {
+        let path = photo_path();
+        info!("Reverie photo saved to {path}");
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(path));
+        photo.pending = None;
+    } else {
+        photo.pending = Some(n - 1);
+    }
+}
+
+/// A timestamped path under `reverie-photos/` (created on demand).
+fn photo_path() -> String {
+    let dir = "reverie-photos";
+    let _ = std::fs::create_dir_all(dir);
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("{dir}/reverie-{ms}.png")
 }
 
 /// Ease the world timescale toward its target (time-dilation on pause).
@@ -265,6 +332,7 @@ fn input_in_world(
     mut queue_open: ResMut<QueueOpen>,
     mut settings_open: ResMut<SettingsOpen>,
     mut credits_open: ResMut<CreditsOpen>,
+    mut photo: ResMut<Photo>,
     mut mode: ResMut<CameraMode>,
     mut activity: ResMut<HudActivity>,
     mut beat: ResMut<Beat>,
@@ -301,6 +369,15 @@ fn input_in_world(
             CameraMode::Explore => CameraMode::Drift,
             CameraMode::Drift => CameraMode::Explore,
         };
+    }
+    if keys.just_pressed(KeyCode::KeyP) {
+        // Photo mode — clear the chrome and capture the world.
+        photo.request();
+        paused.0 = false;
+        playback.playing = true;
+        queue_open.0 = false;
+        settings_open.0 = false;
+        credits_open.0 = false;
     }
     if paused.0 {
         if keys.just_pressed(KeyCode::ArrowLeft) {

@@ -437,19 +437,27 @@ fn chip(parent: &mut ChildSpawnerCommands<'_>, fonts: &Fonts, label: &str, key: 
                     target: FadeTarget::Text,
                 },
             ));
-            c.spawn((keycap_node(), BackgroundColor(theme::hairline())))
-                .with_children(|k| {
-                    k.spawn((
-                        Text::new(key.to_string()),
-                        text_font(fonts.ui_semibold.clone(), 10.5),
-                        TextColor(theme::text_muted()),
-                        Fade {
-                            group: FadeGroup::Full,
-                            base: theme::text_muted(),
-                            target: FadeTarget::Text,
-                        },
-                    ));
-                });
+            c.spawn((
+                keycap_node(),
+                BackgroundColor(theme::hairline()),
+                Fade {
+                    group: FadeGroup::Full,
+                    base: theme::hairline(),
+                    target: FadeTarget::Bg,
+                },
+            ))
+            .with_children(|k| {
+                k.spawn((
+                    Text::new(key.to_string()),
+                    text_font(fonts.ui_semibold.clone(), 10.5),
+                    TextColor(theme::text_muted()),
+                    Fade {
+                        group: FadeGroup::Full,
+                        base: theme::text_muted(),
+                        target: FadeTarget::Text,
+                    },
+                ));
+            });
         });
 }
 
@@ -483,6 +491,7 @@ fn mode_tab(
     parent
         .spawn((
             ModeTab(mode),
+            Button, // clickable — switches camera feel (see `mode_tab_clicks`)
             rounded(
                 Node {
                     padding: UiRect::axes(Val::Px(16.0), Val::Px(7.0)),
@@ -552,11 +561,17 @@ fn ease(current: f32, target: f32, dt: f32) -> f32 {
 }
 
 /// Apply the eased alphas to every faded node.
+#[allow(clippy::type_complexity)]
 pub fn apply_hud_alpha(
     activity: Res<HudActivity>,
-    mut q: Query<(&Fade, Option<&mut BackgroundColor>, Option<&mut TextColor>)>,
+    mut q: Query<(
+        &Fade,
+        Option<&mut BackgroundColor>,
+        Option<&mut TextColor>,
+        Option<&mut BorderColor>,
+    )>,
 ) {
-    for (fade, bg, text) in &mut q {
+    for (fade, bg, text, border) in &mut q {
         let g = match fade.group {
             FadeGroup::Full => activity.full,
             FadeGroup::Minimal => activity.minimal,
@@ -573,6 +588,12 @@ pub fn apply_hud_alpha(
                     t.0 = col;
                 }
             }
+        }
+        // HUD borders are all hairline; fade them with the same group so the
+        // chrome disappears completely (no ghost outlines when Hidden).
+        if let Some(mut b) = border {
+            let h = theme::hairline();
+            *b = BorderColor::all(h.with_alpha(h.alpha() * g));
         }
     }
 }
@@ -683,5 +704,17 @@ pub fn update_reticle(mode: Res<CameraMode>, mut q: Query<&mut Visibility, With<
         } else {
             Visibility::Hidden
         };
+    }
+}
+
+/// Clicking an Explore/Drift tab switches the camera feel (in addition to `F`).
+pub fn mode_tab_clicks(
+    mut mode: ResMut<CameraMode>,
+    q: Query<(&ModeTab, &Interaction), Changed<Interaction>>,
+) {
+    for (tab, interaction) in &q {
+        if *interaction == Interaction::Pressed {
+            *mode = tab.0;
+        }
     }
 }
