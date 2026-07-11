@@ -21,8 +21,9 @@ cd apps/reverie
 cargo run
 ```
 
-Opens a window titled **Reverie**. You start on the first-run screen; press
-**Enter** (or click *Choose your music folder…*) to enter a world.
+Opens a window titled **Reverie**. You start in a three-step onboarding
+(photosensitivity → controls → import); click through it, or *Skip setup* /
+press **Enter** to jump straight into a world.
 
 ### Controls
 
@@ -50,9 +51,9 @@ current world's palette.
 - **HUD** (`src/hud.rs`) — now-playing cluster, beat-reactive progress with
   section notches, control hints, Explore/Drift toggle, corner affordances, and
   the three-depth fade behaviour.
-- **Overlays** (`src/overlays.rs`) — first-run import, pause (with world-intensity
-  slider), slide-in queue, **Settings** (Comfort group with working toggles), and
-  **Credits & Licenses**.
+- **Overlays** (`src/overlays.rs`) — three-step **onboarding** (photosensitivity
+  → controls → import), pause (with world-intensity slider), slide-in queue,
+  **Settings** (Comfort group with working toggles), and **Credits & Licenses**.
 - **Comfort** — *Reduce flashing* holds the world glow steady (no beat pulse) and
   caps UI pulses; *Gentler world motion* damps the sway. Both apply instantly.
 - **Photo mode** (`P` or the pause button) — clears the chrome and saves a clean
@@ -61,9 +62,8 @@ current world's palette.
   with HDR + bloom, Explore/Drift cameras, and pause time-dilation, so the HUD
   always overlays a live world.
 
-Not yet built (follow-ups): the full 3-step onboarding, the Library/Home screen,
-and the non-Comfort settings groups (display-only for now); real audio + MIR;
-asset assembly.
+Not yet built (follow-ups): the Library/Home screen, and the non-Comfort
+settings groups (display-only for now); real audio + MIR; asset assembly.
 
 ## Fonts
 

@@ -72,6 +72,12 @@ impl Photo {
     }
 }
 
+/// First-run onboarding step (0 = photosensitivity, 1 = controls, 2 = import).
+#[derive(Resource, Default)]
+pub struct Onboarding {
+    pub step: u8,
+}
+
 /// World-intensity slider value (0..1), shown in the pause overlay.
 #[derive(Resource)]
 pub struct WorldIntensity(pub f32);
@@ -123,6 +129,7 @@ fn main() {
     .init_resource::<SettingsOpen>()
     .init_resource::<CreditsOpen>()
     .init_resource::<Photo>()
+    .init_resource::<Onboarding>()
     .init_resource::<WorldIntensity>()
     .init_resource::<Comfort>()
     .init_resource::<WorldClock>()
@@ -141,7 +148,10 @@ fn main() {
             ease_world_clock,
         ),
     )
-    .add_systems(Update, input_first_run.run_if(in_state(AppState::FirstRun)))
+    .add_systems(
+        Update,
+        (input_first_run, overlays::refresh_onboarding).run_if(in_state(AppState::FirstRun)),
+    )
     .add_systems(
         Update,
         world::camera_control
@@ -201,6 +211,7 @@ fn smoke_drive(
     mut credits_open: ResMut<CreditsOpen>,
     mut comfort: ResMut<Comfort>,
     mut photo: ResMut<Photo>,
+    mut onboarding: ResMut<Onboarding>,
     mut exit: MessageWriter<AppExit>,
     mut commands: Commands,
     mut phase: Local<u8>,
@@ -208,51 +219,72 @@ fn smoke_drive(
     let t = time.elapsed_secs();
     let dir = std::env::var("REVERIE_SHOT").ok();
 
-    if t > 0.6 && *state.get() == AppState::FirstRun {
-        next.set(AppState::InWorld); // spawns the HUD
-    }
-    if t > 1.2 && *phase == 0 {
+    // --- Onboarding walk (FirstRun) ---
+    if t > 0.4 && *phase == 0 {
         *phase = 1;
-        shot(&mut commands, &dir, "reverie-hud.png");
+        shot(&mut commands, &dir, "reverie-onboard-1.png");
+    }
+    if t > 0.8 {
+        onboarding.step = 1;
+    }
+    if t > 1.2 && *phase == 1 {
+        *phase = 2;
+        shot(&mut commands, &dir, "reverie-onboard-2.png");
     }
     if t > 1.6 {
+        onboarding.step = 2;
+    }
+    if t > 2.0 && *phase == 2 {
+        *phase = 3;
+        shot(&mut commands, &dir, "reverie-onboard-3.png");
+    }
+    if t > 2.4 && *state.get() == AppState::FirstRun {
+        next.set(AppState::InWorld); // spawns the HUD
+    }
+
+    // --- In-world walk ---
+    if t > 3.0 && *phase == 3 {
+        *phase = 4;
+        shot(&mut commands, &dir, "reverie-hud.png");
+    }
+    if t > 3.4 {
         queue_open.0 = true; // spawns the queue panel
     }
-    if t > 2.0 {
+    if t > 3.8 {
         paused.0 = true; // spawns the pause overlay
     }
-    if t > 2.7 && *phase == 1 {
-        *phase = 2;
+    if t > 4.4 && *phase == 4 {
+        *phase = 5;
         shot(&mut commands, &dir, "reverie-overlays.png");
     }
-    if t > 3.1 {
+    if t > 4.8 {
         queue_open.0 = false;
         paused.0 = false; // Settings lifts pause (as the real button does)
         settings_open.0 = true;
         comfort.reduce_flashing = true; // show a toggle in the "on" state
     }
-    if t > 3.7 && *phase == 2 {
-        *phase = 3;
+    if t > 5.4 && *phase == 5 {
+        *phase = 6;
         shot(&mut commands, &dir, "reverie-settings.png");
     }
-    if t > 4.1 {
+    if t > 5.8 {
         credits_open.0 = true;
     }
-    if t > 4.7 && *phase == 3 {
-        *phase = 4;
+    if t > 6.4 && *phase == 6 {
+        *phase = 7;
         shot(&mut commands, &dir, "reverie-credits.png");
     }
-    if t > 4.9 {
+    if t > 6.6 {
         credits_open.0 = false;
         settings_open.0 = false;
     }
     // Request the photo only once the chrome has been closed for a while, so
     // the capture lands on a stable, clean frame.
-    if t > 5.7 && *phase == 4 {
-        *phase = 5;
+    if t > 7.4 && *phase == 7 {
+        *phase = 8;
         photo.request();
     }
-    if t > 6.6 {
+    if t > 8.4 {
         exit.write(AppExit::Success);
     }
 }
