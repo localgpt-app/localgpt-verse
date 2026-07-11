@@ -65,7 +65,8 @@ current world's palette.
   always overlays a live world.
 
 Not yet built (follow-ups): the non-Comfort settings groups (display-only for
-now); real audio + MIR; asset assembly.
+now); real audio + MIR; asset assembly. See [PLAN.md](PLAN.md) for the
+backend library choices and milestone plan.
 
 ## Fonts
 
