@@ -159,6 +159,16 @@ attribution already wired through the manifest → Credits screen.
 >   now-playing-first view with ↑/↓ reorder buttons.
 > - Analysis lookahead deepened (4 tracks) so back-to-back skips land
 >   pre-analyzed.
+> - **Transport controls filled in:** click/drag **seek** strip over the
+>   progress bar + arrow-key scrub (±5s); **previous** (B / media key, restart
+>   if >3s in); **MediaTrackNext/Previous/PlayPause**; **volume fader** (−/=)
+>   combined with **EBU R128 loudness normalization** toward −14 LUFS
+>   (`ebur128` measured in the analysis decode, stored in the sidecar, applied
+>   ±12 dB on the kira sub-track). Section notches now refresh on analysis.
+> - **CC0 starter music** (`reverie-assets/generate_music.py` → 4 original
+>   algorithmic ambient tracks, ~4 MB, CC0-1.0): auto-loaded on first run
+>   through the same import path as user music, so the app **plays
+>   immediately** without a folder pick. `bundle.sh` ships `assets/music/`.
 >
 > **M7 remains the deferred tier** (Beat This!/WFC/LLM recipes/Demucs):
 > `beat-this` (a 1.0.0 Rust+ONNX wrap of Beat This!) appeared on crates.io
