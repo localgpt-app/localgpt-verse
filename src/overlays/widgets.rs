@@ -11,6 +11,11 @@ pub(super) fn rounded(mut node: Node, radius: f32) -> Node {
     node
 }
 
+/// Marks the scrollable content region of an overlay (credits, queue) —
+/// `overlay_scroll` maps the mouse wheel onto its `ScrollPosition`.
+#[derive(Component)]
+pub struct Scrollable;
+
 /// Spawn a pill button into `parent`.
 pub(super) fn button(
     parent: &mut ChildSpawnerCommands<'_>,

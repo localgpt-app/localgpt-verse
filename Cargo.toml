@@ -37,3 +37,18 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# PLAN.md M5 — CLAP zero-shot mood + audio embeddings. Opt-in: the model is a
+# ~78 MB download (scripts/fetch-clap.sh) and ort pulls ONNX Runtime binaries;
+# without the feature (or the model file) the app uses the rule mapper (M4).
+[features]
+ml = ["dep:ort", "dep:rubato"]
+
+[dependencies.ort]
+# Pinned to the same rc the monorepo's fastembed uses (PLAN §0.6).
+version = "2.0.0-rc.12"
+optional = true
+
+[dependencies.rubato]
+version = "0.16"
+optional = true

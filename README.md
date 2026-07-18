@@ -38,6 +38,23 @@ folder is never written to). *Keep this world* pins the mood into that sidecar.
 Without an import (or an audio device) the app falls back to the silent
 simulated transport. Dev shortcut: `REVERIE_IMPORT=<dir>` imports at startup.
 
+**ML moods (PLAN.md M5, optional):** build with `--features ml` and run
+`scripts/fetch-clap.sh` once (78 MB CLAP audio model, LAION/Xenova ONNX) —
+tracks then get a 512-d CLAP embedding (3 windows averaged) and a zero-shot
+mood from it, upgrading the rule mapper; the embedding is stored in the
+sidecar for future asset selection. Without the feature or the model file the
+rule mapper runs. Note the CLAP weights are CC-BY-NC (see PLAN.md §4).
+
+**Asset pack:** 52 CC0 Poly Haven models (~13 per mood) live in the separate
+`reverie-assets` repo (`fetch_polyhaven.py` downloads + writes the manifest;
+`normalize.py` packs each model to a single uncompressed `.glb` — bevy_gltf
+supports neither quantized nor meshopt-compressed geometry — and syncs the
+manifest-referenced set into `assets/models/`). Placement rescales each model
+to its tier's span (hero 7 m / prop 2.5 m / cover 1 m), culls by
+`VisibilityRange`, and arranges per mood: organic spiral (Ember/Tide), city
+grid (Velvet Circuit), crystal rings (Glass Expanse). The Credits screen
+renders the manifest.
+
 ### Controls
 
 | Key | Action |
@@ -74,13 +91,19 @@ current world's palette.
   caps UI pulses; *Gentler world motion* damps the sway. Both apply instantly.
 - **Photo mode** (`P` or the pause button) — clears the chrome and saves a clean
   screenshot of the world to `reverie-photos/`.
-- **Placeholder world** (`src/world.rs`) — a mood-tinted field of drifting shapes
-  with HDR + bloom, Explore/Drift cameras, and pause time-dilation, so the HUD
-  always overlays a live world.
+- **World props** (`src/world_assets.rs`) — the manifest-driven glTF pack:
+  per-mood placement in three tiers (hero/prop/ground cover), span-normalized
+  from each model's native size, with `VisibilityRange` LOD, per-mood
+  arrangements, and a rise-in materialize that settles on the first downbeat —
+  over the same procedural drifting backdrop (`src/world.rs`) with HDR + bloom,
+  Explore/Drift cameras, and pause time-dilation.
+- **Queue panel** (`Tab`) — now-playing-first view with ↑/↓ reorder buttons;
+  tracks carry a content-hash id (blake3) so imports dedupe and reorder never
+  restarts the playing track.
 
 Not yet built (follow-ups): the non-Comfort settings groups (display-only for
-now); real audio + MIR; asset assembly. See [PLAN.md](PLAN.md) for the
-backend library choices and milestone plan.
+now); the M7 tier (Beat This!/WFC/LLM/Demucs — see [PLAN.md](PLAN.md) for the
+status of each).
 
 ## Fonts
 
@@ -95,3 +118,14 @@ until then it falls back to Bevy's embedded font. See
 REVERIE_SMOKE=1 cargo run                    # boots through every screen, then exits
 REVERIE_SMOKE=1 REVERIE_SHOT=/tmp cargo run  # also saves reverie-hud.png / reverie-overlays.png
 ```
+
+## Perf stress test
+
+```bash
+REVERIE_STRESS=5000 cargo run --release      # spawns 5000 prop instances, logs fps, exits after 30s
+REVERIE_STRESS=0 cargo run --release         # control run: report only, no extra props
+```
+
+Runs uncapped (vsync off) so the numbers show true frame cost. On the dev
+machine (2026-07): baseline world ~60 fps, ~1k props ≈ 14 fps, 5k ≈ 9 fps —
+dense packs beyond that need real instancing (PLAN.md status).

@@ -164,3 +164,34 @@ All actionable findings were fixed the day of the review:
 | R8 | **Fixed** — photo mode samples the readback and retries black frames (bounded, single output path) | `baf0118` |
 | R9 | **Fixed** — `scripts/bundle.sh` assembles dist/ (release binary + fonts + models from `reverie-assets`) | this commit |
 | R10 | **Fixed** — PLAN status corrected; transition engine actually built (R1) | `1b995a5` |
+
+## 9. Follow-up findings (2026-07, post-review work)
+
+The §7 action items are all closed. New work since (PLAN.md status has the
+full list); findings worth recording:
+
+- **R7 closed:** `VisibilityRange` LOD landed with the pack expansion (7 → 52
+  CC0 models, ~13/mood). Props are span-normalized from native dims in the
+  manifest (Poly Haven scans span 0.1–92 m — without normalization a 138 m
+  cliff could swallow the camera; caught via a black screenshot, fixed by
+  tier target spans).
+- **The 5k-instance budget is measured, not met:** ~60 fps baseline,
+  ~14 fps @ 1k scene-root props, ~9 fps @ 5k (uncapped, release). CPU-side
+  scene/entity overhead dominates (draw batching already handles the GPU
+  side). Dense packs need real instancing before they ship; ~70–90 props is
+  the comfortable ceiling today.
+- **Screenshot black frames (R8) are environment-sensitive:** oneshot shots
+  flake black ~50% of runs (the in-app Photo retry mitigates). A *consistent*
+  black frame means a scene bug (see the cliff above), not the flake — check
+  logs before retrying.
+- **Track identity (R5) fully closed:** `Track.id` = blake3 content hash =
+  sidecar key; import dedupes by it; queue reorder (↑/↓ in the panel) is
+  path-keyed-safe.
+- **M5 (CLAP) landed behind `ml`:** zero-shot mood from 3-window averaged
+  audio embeddings vs precomputed text embeddings; mel frontend validated
+  against HF's ClapFeatureExtractor (≤0.5 dB), end-to-end embedding cosine
+  >0.995, 5/5 on a small genre panel after prompt tuning. Weights are
+  CC-BY-NC — do not ship commercially without clearing that.
+- **bevy_gltf extension limits now documented:** no KHR_mesh_quantization,
+  no EXT_meshopt_compression (0.19) — offline normalization packs
+  uncompressed `.glb` (173 MB for 52 models).

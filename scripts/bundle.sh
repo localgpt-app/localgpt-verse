@@ -23,7 +23,9 @@ cp target/release/reverie dist/
 cp -R assets/fonts dist/assets/fonts
 
 if [ -d "$ASSETS_REPO/models" ]; then
-  cp -R "$ASSETS_REPO/models" dist/assets/models
+  # Ship only the manifest-referenced (normalized .glb) files, not the
+  # original .gltf/.bin/texture trees (PLAN.md §1.3 offline normalization).
+  python3 "$ASSETS_REPO/normalize.py" --sync "$(pwd)/dist/assets/models"
   echo "    bundled 3D pack from $ASSETS_REPO"
 else
   echo "    warn: $ASSETS_REPO/models not found — bundling without the 3D pack (procedural worlds)"

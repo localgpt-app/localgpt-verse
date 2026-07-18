@@ -124,16 +124,47 @@ attribution already wired through the manifest → Credits screen.
 
 ## 3. Implementation steps (each lands green: build + clippy + fmt + tests + smoke)
 
-> **Status:** M1–M4 + **M6 done** — real playback, live tap, offline analysis +
-> sidecar cache, rule-based mood + pinning, and the glTF asset pipeline (a
-> 7-model CC0 Poly Haven starter pack in `reverie-assets`, expandable). Fonts
-> (Marcellus + Hanken Grotesk, OFL) bundled. The **transition engine**
-> (ARCHITECTURE.md R1 — M3's deferred exit criterion) is now built: dual-stream
-> equal-power crossfade in the final `min(6s, 25%)` of each song, 0.8s palette
-> wash, and a staggered prop materialize that settles on the incoming track's
-> first downbeat. **M5 (CLAP)** remains an optional upgrade to the working M4
-> mapper — needs a ~150 MB ONNX model + `ort`; **M7** is the deferred upgrade
-> tier (Beat This!/WFC/LLM/Demucs), also downloads.
+> **Status:** M1–M6 done — real playback, live tap, offline analysis +
+> sidecar cache, rule-based mood + pinning, the glTF asset pipeline, and the
+> **transition engine** (ARCHITECTURE R1: dual-stream equal-power crossfade in
+> the final `min(6s, 25%)`, 0.8s palette wash, staggered prop materialize
+> settling on the incoming track's first downbeat; same-mood morphs in place).
+> Fonts (Marcellus + Hanken Grotesk, OFL) bundled.
+>
+> **2026-07 follow-up** (all on `main`):
+> - **Asset pack: 52 CC0 Poly Haven models** (was 7), ~13 per mood incl. full
+>   VELVET CIRCUIT + GLASS EXPANSE coverage; `reverie-assets` gained
+>   `fetch_polyhaven.py` (provenance + reproducibility) and `normalize.py`
+>   (offline .glb packing — **uncompressed**: bevy_gltf supports neither
+>   KHR_mesh_quantization nor EXT_meshopt_compression, so geometry stays
+>   fp32; 173 MB packed). Placement: `VisibilityRange` LOD (R7) + per-mood
+>   layout rules (organic spiral / city grid / crystal rings).
+> - **Perf validated** (`REVERIE_STRESS=N`, uncapped): baseline world ~60 fps;
+>   ~1k scene-root props ≈ 14 fps; 5k ≈ 9 fps. The idea.md "5k instances"
+>   budget is **not** met via scene-root clones — it needs real instancing
+>   (draw-call batching exists; CPU-side scene/entity overhead dominates).
+>   Real worlds use ~70–90 props, so the app sits at the 60 fps cap; dense
+>   packs want the instancing path first.
+> - **M5 done (opt-in `ml` feature):** CLAP (LAION music+speech, Xenova
+>   quantized ONNX, 78 MB audio branch via `scripts/fetch-clap.sh`) embeds 3
+>   windows/track (rubato → 48 kHz, Slaney log-mel frontend matching HF's
+>   ClapFeatureExtractor, ort) → zero-shot mood vs 4 precomputed text
+>   embeddings; 512-d embedding stored in the sidecar (asset-selection hook).
+>   5/5 on a small genre panel vs 2/5 for the first prompt draft — prompt
+>   tuning matters; rule mapper stays the no-model fallback. **License
+>   caveat:** CLAP weights are CC-BY-NC — verify before any commercial
+>   distribution (PLAN §4); the app runs fine without them.
+> - **Track identity:** `Track.id` = blake3 content hash (sidecar key) —
+>   import dedupe, reorder-safe, rename-proof (R5 done). Queue panel: rotated
+>   now-playing-first view with ↑/↓ reorder buttons.
+> - Analysis lookahead deepened (4 tracks) so back-to-back skips land
+>   pre-analyzed.
+>
+> **M7 remains the deferred tier** (Beat This!/WFC/LLM recipes/Demucs):
+> `beat-this` (a 1.0.0 Rust+ONNX wrap of Beat This!) appeared on crates.io
+> and is a plausible drop-in, unaudited; WFC is superseded for now by the
+> per-mood layout rules above; LLM recipes need a local server (Ollama) +
+> model pull — none load-bearing.
 
 
 **M1 — Real playback core.**

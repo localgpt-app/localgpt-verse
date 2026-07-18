@@ -339,6 +339,8 @@ fn read_track(path: &Path) -> Option<Track> {
         mood: path_mood(path),
         section: "Your library".into(),
         path: Some(path.to_path_buf()),
+        // Content hash = stable identity (dedupe, sidecar key, reorder-proof).
+        id: crate::analysis::cache_key(path),
     })
 }
 
@@ -384,26 +386,37 @@ pub fn poll_import(
     }
 
     if !batch.is_empty() {
-        if !import.imported_any {
-            import.imported_any = true;
-            playback.queue.clear();
-            playback.current = 0;
-            playback.elapsed = 0.0;
-            playback.playing = true;
-            theme.mood = batch[0].mood;
-            // Force the player to restart on the new queue.
-            if let Some(inner) = player.0.lock().unwrap().as_mut() {
-                for handle in inner.handle.iter_mut().chain(inner.fading_out.iter_mut()) {
-                    handle.stop(tween_ms(200));
+        // Dedupe by content id — the same song reachable through two paths
+        // (symlinked folders, stray copies) imports once (ARCHITECTURE R5).
+        let mut seen: std::collections::HashSet<String> =
+            playback.queue.iter().filter_map(|t| t.id.clone()).collect();
+        batch.retain(|t| match &t.id {
+            Some(id) => seen.insert(id.clone()),
+            None => true,
+        });
+        if !batch.is_empty() {
+            if !import.imported_any {
+                import.imported_any = true;
+                playback.queue.clear();
+                playback.current = 0;
+                playback.elapsed = 0.0;
+                playback.playing = true;
+                theme.mood = batch[0].mood;
+                // Force the player to restart on the new queue.
+                if let Some(inner) = player.0.lock().unwrap().as_mut() {
+                    for handle in inner.handle.iter_mut().chain(inner.fading_out.iter_mut()) {
+                        handle.stop(tween_ms(200));
+                    }
+                    inner.handle = None;
+                    inner.fading_out = None;
+                    inner.fade_in_next = None;
+                    inner.playing = None;
                 }
-                inner.handle = None;
-                inner.fading_out = None;
-                inner.fade_in_next = None;
-                inner.playing = None;
             }
+            import.count += batch.len();
+            playback.queue.append(&mut batch);
+            playback.revision += 1;
         }
-        import.count += batch.len();
-        playback.queue.append(&mut batch);
     }
 
     if done {

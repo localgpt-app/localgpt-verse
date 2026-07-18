@@ -23,6 +23,10 @@ pub struct Track {
     /// Audio file on disk. `None` for the built-in demo tracks — those play
     /// silently on the simulated clock.
     pub path: Option<PathBuf>,
+    /// Stable identity: the blake3 content hash (also the analysis sidecar
+    /// key — ARCHITECTURE R5). `None` for demo tracks. Survives renames,
+    /// moves, and queue reordering; used for import dedupe.
+    pub id: Option<String>,
 }
 
 impl Track {
@@ -35,6 +39,7 @@ impl Track {
             mood,
             section: section.into(),
             path: None,
+            id: None,
         }
     }
 }
@@ -50,6 +55,9 @@ pub struct Playback {
     pub playing: bool,
     /// Section boundaries as fractions 0..1 of the track — drawn as notches.
     pub sections: Vec<f32>,
+    /// Bumped on queue/current changes (advance, import, reorder) so UI
+    /// panels can refresh without diffing the queue every frame.
+    pub revision: u64,
 }
 
 impl Default for Playback {
@@ -95,6 +103,7 @@ impl Default for Playback {
             playing: true,
             sections: vec![0.0, 0.18, 0.42, 0.63, 0.85],
             queue,
+            revision: 0,
         }
     }
 }
@@ -117,6 +126,7 @@ impl Playback {
     pub fn advance(&mut self) -> usize {
         self.current = (self.current + 1) % self.queue.len();
         self.elapsed = 0.0;
+        self.revision += 1;
         self.track().mood
     }
 }

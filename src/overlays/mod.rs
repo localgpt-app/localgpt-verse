@@ -17,7 +17,7 @@ mod widgets;
 
 pub use actions::{
     UiAction, app_actions, comfort_actions, dispatch_buttons, onboarding_actions, overlay_actions,
-    world_actions,
+    overlay_scroll, queue_actions, world_actions,
 };
 pub use credits::sync_credits_overlay;
 pub use library::{handle_world_cards, sync_library_overlay};

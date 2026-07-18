@@ -30,6 +30,12 @@ pub enum ButtonAction {
     RestoreComfort,
     ToggleReduceFlashing,
     ToggleGentlerMotion,
+    /// Move the queue entry at absolute index `idx` by `dir` (-1/+1) — the
+    /// queue panel's ↑/↓ buttons (spec 1l reorder).
+    QueueMove {
+        idx: usize,
+        dir: i32,
+    },
     Quit,
 }
 
@@ -158,8 +164,8 @@ pub fn world_actions(
                 // track's analysis sidecar so the song always returns here.
                 if !playback.queue.is_empty() {
                     let idx = playback.current % playback.queue.len();
-                    if let Some(path) = playback.queue[idx].path.clone() {
-                        analysis.toggle_pin(&path, theme.mood, layout.seed);
+                    if let Some(id) = playback.queue[idx].id.clone() {
+                        analysis.toggle_pin(&id, theme.mood, layout.seed);
                     }
                 }
             }
@@ -191,12 +197,60 @@ pub fn comfort_actions(mut actions: MessageReader<UiAction>, mut comfort: ResMut
     }
 }
 
+/// Mouse-wheel scrolling for long overlay content (credits list, queue). Any
+/// open `Scrollable` region follows the wheel; regions hidden behind a modal
+/// scroll invisibly, which is harmless.
+pub fn overlay_scroll(
+    stack: Res<OverlayStack>,
+    queue_open: Res<QueueOpen>,
+    wheel: Res<bevy::input::mouse::AccumulatedMouseScroll>,
+    mut scrollables: Query<&mut ScrollPosition, With<super::widgets::Scrollable>>,
+) {
+    if !stack.is_open(Overlay::Credits) && !queue_open.0 {
+        return;
+    }
+    let dy = wheel.delta.y;
+    if dy == 0.0 {
+        return;
+    }
+    for mut pos in &mut scrollables {
+        pos.y -= dy * 24.0;
+    }
+}
+
 /// App-level actions.
 pub fn app_actions(mut actions: MessageReader<UiAction>, mut exit: MessageWriter<AppExit>) {
     for UiAction(action) in actions.read() {
         if matches!(action, ButtonAction::Quit) {
             exit.write(AppExit::Success);
         }
+    }
+}
+
+/// Queue reorder (spec 1l): ↑/↓ swap a track with its neighbour. The
+/// now-playing track never moves — audio continues uninterrupted (playback
+/// is path-keyed, ARCHITECTURE R5) and the queue keeps its circular order.
+pub fn queue_actions(mut actions: MessageReader<UiAction>, mut playback: ResMut<Playback>) {
+    for UiAction(action) in actions.read() {
+        let ButtonAction::QueueMove { idx, dir } = action else {
+            continue;
+        };
+        let len = playback.queue.len();
+        if len < 2 || *idx >= len {
+            continue;
+        }
+        let other = *idx as i32 + dir;
+        let current = playback.current % len;
+        // No wrap, and swaps never touch the now-playing slot.
+        if other < 0 || other >= len as i32 {
+            continue;
+        }
+        let other = other as usize;
+        if *idx == current || other == current {
+            continue;
+        }
+        playback.queue.swap(*idx, other);
+        playback.revision += 1;
     }
 }
 

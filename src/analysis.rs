@@ -29,6 +29,8 @@ const ANALYSIS_SR: u32 = 11_025;
 const MAX_ANALYSIS_SECS: f32 = 480.0;
 const FFT_SIZE: usize = 1024;
 const HOP: usize = 256;
+/// How many upcoming tracks to pre-analyze beyond the current one.
+const LOOKAHEAD: usize = 4;
 
 // ---------------------------------------------------------------------------
 // Sidecar
@@ -56,6 +58,12 @@ pub struct TrackAnalysis {
     /// The pinned layout seed — with `pinned_mood`, the full world identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_seed: Option<u64>,
+    /// CLAP 512-d audio embedding (PLAN.md M5, `ml` feature). Present only
+    /// when the model was available; `mood` then comes from the zero-shot
+    /// tagger instead of the rule mapper. Also the hook for embedding-based
+    /// asset selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<Vec<f32>>,
 }
 
 fn cache_dir() -> Option<PathBuf> {
@@ -64,8 +72,9 @@ fn cache_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
-/// Content hash of the file (chunked blake3) — the sidecar filename.
-fn cache_key(path: &Path) -> Option<String> {
+/// Content hash of the file (chunked blake3) — the sidecar filename and the
+/// track's stable identity (`Track.id`, ARCHITECTURE R5).
+pub(crate) fn cache_key(path: &Path) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;
     let mut hasher = blake3::Hasher::new();
     std::io::copy(&mut file, &mut hasher).ok()?;
@@ -99,9 +108,9 @@ fn save_sidecar(key: &str, analysis: &TrackAnalysis) {
 // Decode (symphonia) → low-rate mono
 // ---------------------------------------------------------------------------
 
-/// Decode to mono at ~[`ANALYSIS_SR`] by boxcar decimation. Returns samples
-/// and the actual rate.
-fn decode_mono(path: &Path) -> Option<(Vec<f32>, u32)> {
+/// Decode to mono at ~`max_sr` by boxcar decimation (native rate when
+/// `max_sr` exceeds the source rate). Returns samples and the actual rate.
+pub(crate) fn decode_mono(path: &Path, max_sr: u32) -> Option<(Vec<f32>, u32)> {
     use symphonia::core::audio::SampleBuffer;
     use symphonia::core::codecs::DecoderOptions;
     use symphonia::core::formats::FormatOptions;
@@ -131,7 +140,7 @@ fn decode_mono(path: &Path) -> Option<(Vec<f32>, u32)> {
         .make(&track.codec_params, &DecoderOptions::default())
         .ok()?;
 
-    let decim = (src_sr / ANALYSIS_SR).max(1) as usize;
+    let decim = (src_sr / max_sr).max(1) as usize;
     let out_sr = src_sr / decim as u32;
     let max_samples = (MAX_ANALYSIS_SECS * out_sr as f32) as usize;
 
@@ -430,7 +439,7 @@ fn map_mood(bpm: f32, mean_energy: f32, mean_centroid_hz: f32) -> usize {
 
 /// Full pipeline for one file.
 fn analyze(path: &Path) -> Option<TrackAnalysis> {
-    let (samples, sr) = decode_mono(path)?;
+    let (samples, sr) = decode_mono(path, ANALYSIS_SR)?;
     let duration = samples.len() as f32 / sr as f32;
     let sweep = spectral_sweep(&samples, sr);
 
@@ -454,6 +463,7 @@ fn analyze(path: &Path) -> Option<TrackAnalysis> {
         mood,
         pinned_mood: None,
         pinned_seed: None,
+        embedding: None,
     })
 }
 
@@ -461,29 +471,30 @@ fn analyze(path: &Path) -> Option<TrackAnalysis> {
 // Worker + Bevy plumbing
 // ---------------------------------------------------------------------------
 
-type WorkerResult = (PathBuf, String, TrackAnalysis);
+type WorkerResult = (String, TrackAnalysis);
 
-/// Analysis results by path, plus the worker channels.
+/// Analysis results by track id (blake3 content hash = sidecar key), plus the
+/// worker channels. Id-keying makes analyses rename/move-proof in memory the
+/// same way the sidecars are on disk (ARCHITECTURE R5).
 #[derive(Resource)]
 pub struct AnalysisStore {
-    map: HashMap<PathBuf, TrackAnalysis>,
-    /// Cache keys for sidecar writes (pinning).
-    keys: HashMap<PathBuf, String>,
-    pending: HashSet<PathBuf>,
-    tx: Sender<PathBuf>,
+    map: HashMap<String, TrackAnalysis>,
+    pending: HashSet<String>,
+    tx: Sender<(String, PathBuf)>,
     rx: Mutex<Receiver<WorkerResult>>,
 }
 
 impl Default for AnalysisStore {
     fn default() -> Self {
-        let (req_tx, req_rx) = channel::<PathBuf>();
+        let (req_tx, req_rx) = channel::<(String, PathBuf)>();
         let (res_tx, res_rx) = channel::<WorkerResult>();
         std::thread::spawn(move || {
-            for path in req_rx {
-                let Some(key) = cache_key(&path) else {
-                    continue;
-                };
-                let analysis = match load_sidecar(&key) {
+            // M5: one CLAP model per worker thread (None without the `ml`
+            // feature or the model file — rules keep running either way).
+            #[cfg(feature = "ml")]
+            let mut clap = crate::ml::ClapModel::try_load();
+            for (id, path) in req_rx {
+                let analysis = match load_sidecar(&id) {
                     Some(a) => a,
                     None => {
                         let started = std::time::Instant::now();
@@ -498,18 +509,34 @@ impl Default for AnalysisStore {
                             a.sections.len(),
                             started.elapsed().as_secs_f32()
                         );
-                        save_sidecar(&key, &a);
+                        save_sidecar(&id, &a);
                         a
                     }
                 };
-                if res_tx.send((path, key, analysis)).is_err() {
+                // M5 upgrade pass: a sidecar with no embedding gets one (plus
+                // the zero-shot mood) even if rules analyzed it earlier.
+                #[cfg(feature = "ml")]
+                let analysis = match (clap.as_mut(), analysis.embedding.is_none()) {
+                    (Some(model), true) => match model.analyze_track(&path) {
+                        Some((embedding, mood)) => {
+                            info!("CLAP embedded {} → mood {mood}", path.display());
+                            let mut a = analysis;
+                            a.mood = mood;
+                            a.embedding = Some(embedding);
+                            save_sidecar(&id, &a);
+                            a
+                        }
+                        None => analysis,
+                    },
+                    _ => analysis,
+                };
+                if res_tx.send((id, analysis)).is_err() {
                     return;
                 }
             }
         });
         Self {
             map: HashMap::new(),
-            keys: HashMap::new(),
             pending: HashSet::new(),
             tx: req_tx,
             rx: Mutex::new(res_rx),
@@ -520,25 +547,25 @@ impl Default for AnalysisStore {
 impl AnalysisStore {
     /// First-beat offset for a track, when analyzed and a grid was found.
     /// Used to land the materialize sequence on the first downbeat.
-    pub fn beat_offset_for(&self, path: &Path) -> Option<f32> {
+    pub fn beat_offset_for(&self, id: &str) -> Option<f32> {
         self.map
-            .get(path)
+            .get(id)
             .filter(|a| a.bpm > 0.0)
             .map(|a| a.beat_offset)
     }
 
-    fn request(&mut self, path: &Path) {
-        if self.map.contains_key(path) || self.pending.contains(path) {
+    fn request(&mut self, id: &str, path: &Path) {
+        if self.map.contains_key(id) || self.pending.contains(id) {
             return;
         }
-        self.pending.insert(path.to_path_buf());
-        let _ = self.tx.send(path.to_path_buf());
+        self.pending.insert(id.to_string());
+        let _ = self.tx.send((id.to_string(), path.to_path_buf()));
     }
 
-    /// Toggle the "Keep this world" pin for `path` at `mood`. Returns the new
+    /// Toggle the "Keep this world" pin for `id` at `mood`. Returns the new
     /// pin state, or `None` when the track has no analysis yet.
-    pub fn toggle_pin(&mut self, path: &Path, mood: usize, seed: u64) -> Option<bool> {
-        let analysis = self.map.get_mut(path)?;
+    pub fn toggle_pin(&mut self, id: &str, mood: usize, seed: u64) -> Option<bool> {
+        let analysis = self.map.get_mut(id)?;
         let pinned = if analysis.pinned_mood.is_some() {
             analysis.pinned_mood = None;
             analysis.pinned_seed = None;
@@ -548,15 +575,13 @@ impl AnalysisStore {
             analysis.pinned_seed = Some(seed);
             true
         };
-        if let Some(key) = self.keys.get(path) {
-            save_sidecar(key, analysis);
-        }
+        save_sidecar(id, analysis);
         Some(pinned)
     }
 }
 
-/// Request analysysis for the current + next track, drain worker results, and
-/// apply the current track's analysis to the transport/beat/theme exactly
+/// Request analysysis for the current + next few tracks, drain worker results,
+/// and apply the current track's analysis to the transport/beat/theme exactly
 /// once per (track, availability) state.
 #[allow(clippy::type_complexity)]
 pub fn sync_analysis(
@@ -565,21 +590,25 @@ pub fn sync_analysis(
     mut beat: ResMut<Beat>,
     mut theme: ResMut<Theme>,
     mut layout: ResMut<crate::world_assets::WorldLayout>,
-    mut applied: Local<Option<(Option<PathBuf>, bool)>>,
+    mut applied: Local<Option<(Option<String>, bool)>>,
 ) {
     if playback.queue.is_empty() {
         return;
     }
 
-    // Keep the current and next tracks in flight ("the next world is
-    // prepared quietly" — queue panel).
+    // Keep the current and next few tracks in flight ("the next world is
+    // prepared quietly" — queue panel). A deeper lookahead means back-to-back
+    // skips still land on analyzed tracks (sections/downbeat/mood ready).
     let idx = playback.current % playback.queue.len();
-    let paths: Vec<PathBuf> = [idx, (idx + 1) % playback.queue.len()]
-        .iter()
-        .filter_map(|&i| playback.queue[i].path.clone())
+    let requests: Vec<(String, PathBuf)> = (0..LOOKAHEAD)
+        .map(|ahead| (idx + ahead) % playback.queue.len())
+        .filter_map(|i| match (&playback.queue[i].id, &playback.queue[i].path) {
+            (Some(id), Some(path)) => Some((id.clone(), path.clone())),
+            _ => None,
+        })
         .collect();
-    for p in paths {
-        store.request(&p);
+    for (id, path) in requests {
+        store.request(&id, &path);
     }
 
     // Drain results.
@@ -590,27 +619,28 @@ pub fn sync_analysis(
             arrived.push(r);
         }
     }
-    for (path, key, analysis) in arrived {
-        store.pending.remove(&path);
-        store.keys.insert(path.clone(), key);
-        store.map.insert(path, analysis);
+    for (id, analysis) in arrived {
+        store.pending.remove(&id);
+        store.map.insert(id, analysis);
     }
 
-    // Apply to the live signals when the current track (keyed by path, so a
-    // queue replacement on import is caught) or its analysis availability
-    // changes.
-    let current_path = playback.queue[idx].path.clone();
-    let has = current_path
+    // Apply to the live signals when the current track (keyed by content id,
+    // so a queue replacement or reorder is caught) or its analysis
+    // availability changes.
+    let current = &playback.queue[idx];
+    let current_id = current.id.clone();
+    let current_path = current.path.clone();
+    let has = current_id
         .as_ref()
-        .is_some_and(|p| store.map.contains_key(p));
-    if applied.as_ref() == Some(&(current_path.clone(), has)) {
+        .is_some_and(|id| store.map.contains_key(id));
+    if applied.as_ref() == Some(&(current_id.clone(), has)) {
         return;
     }
-    *applied = Some((current_path.clone(), has));
+    *applied = Some((current_id.clone(), has));
 
     // Per-track layout seed: the pin wins, else a deterministic default from
     // the path (same song → same place until re-rolled).
-    match current_path.as_ref().and_then(|p| store.map.get(p)) {
+    match current_id.as_ref().and_then(|id| store.map.get(id)) {
         Some(a) => {
             playback.sections = a.sections.clone();
             if a.bpm > 0.0 {

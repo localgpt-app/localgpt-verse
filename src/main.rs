@@ -8,6 +8,8 @@
 mod analysis;
 mod audio;
 mod hud;
+#[cfg(feature = "ml")]
+mod ml;
 mod overlays;
 mod playback;
 mod theme;
@@ -158,13 +160,21 @@ impl Default for WorldClock {
 }
 
 fn main() {
+    let mut window = Window {
+        title: "Reverie".to_string(),
+        resolution: (1280, 800).into(),
+        ..default()
+    };
+    // Stress mode measures true frame cost — vsync hides real throughput
+    // behind display pacing (and background throttling skews it further).
+    let stress = world_assets::StressTest::from_env();
+    if stress.is_some() {
+        window.present_mode = bevy::window::PresentMode::AutoNoVsync;
+    }
+
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "Reverie".to_string(),
-            resolution: (1280, 800).into(),
-            ..default()
-        }),
+        primary_window: Some(window),
         ..default()
     }))
     .insert_resource(ClearColor(theme::BASE))
@@ -219,10 +229,12 @@ fn main() {
                 overlays::world_actions,
                 overlays::comfort_actions,
                 overlays::app_actions,
+                overlays::queue_actions,
             ),
         )
             .chain(),
     )
+    .add_systems(Update, overlays::overlay_scroll)
     .add_systems(Update, (world::palette_wash, world::animate_world).chain())
     .add_systems(
         Update,
@@ -300,6 +312,20 @@ fn main() {
     // surface (world → queue → pause) then exits — a headful boot check.
     if std::env::var("REVERIE_SMOKE").is_ok() {
         app.add_systems(Update, smoke_drive);
+    }
+
+    // Perf validation: `REVERIE_STRESS=5000 cargo run` fills the world with
+    // prop instances and logs frame rates, then exits after 30 s. Skips
+    // onboarding so the measurement starts immediately (needs the asset pack).
+    if let Some(stress) = stress {
+        app.insert_resource(stress);
+        app.insert_state(AppState::InWorld);
+        app.add_systems(
+            Update,
+            (world_assets::stress_spawn, world_assets::stress_report)
+                .chain()
+                .run_if(in_state(AppState::InWorld)),
+        );
     }
 
     app.run();

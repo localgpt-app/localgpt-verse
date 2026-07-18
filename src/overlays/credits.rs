@@ -120,44 +120,59 @@ fn spawn_credits(
                 });
 
                 spacer(card, 16.0);
-                // Real per-asset CC0/CC-BY attribution from the bundled asset
-                // manifest (PLAN.md M6); falls back to a note when none ships.
-                match manifest {
-                    Some(m) if !m.assets.is_empty() => {
-                        section_label(card, fonts, &format!("3D ASSETS · {}", m.assets.len()));
-                        for a in &m.assets {
-                            let detail = format!(
-                                "{} · {}",
-                                a.tier_label(),
-                                theme::MOODS[a.mood % theme::MOODS.len()].world_name
-                            );
-                            credit_row(
-                                card, fonts, &a.name, &detail, &a.author, &a.license, accent,
+                // Rows live in a scroll region — the full pack (50+ assets)
+                // plus software credits overflows any fixed card.
+                card.spawn((
+                    Scrollable,
+                    ScrollPosition::default(),
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(4.0),
+                        max_height: Val::Px(540.0),
+                        overflow: Overflow::scroll_y(),
+                        ..default()
+                    },
+                ))
+                .with_children(|rows| {
+                    // Real per-asset CC0/CC-BY attribution from the bundled
+                    // asset manifest (PLAN.md M6); falls back to a note.
+                    match manifest {
+                        Some(m) if !m.assets.is_empty() => {
+                            section_label(rows, fonts, &format!("3D ASSETS · {}", m.assets.len()));
+                            for a in &m.assets {
+                                let detail = format!(
+                                    "{} · {}",
+                                    a.tier_label(),
+                                    theme::MOODS[a.mood % theme::MOODS.len()].world_name
+                                );
+                                credit_row(
+                                    rows, fonts, &a.name, &detail, &a.author, &a.license, accent,
+                                );
+                            }
+                        }
+                        _ => {
+                            section_label(rows, fonts, "3D ASSETS");
+                            label_text(
+                                rows,
+                                fonts,
+                                "No asset packs bundled yet — worlds are procedural for now.",
+                                11.5,
+                                theme::text_muted(),
+                                false,
                             );
                         }
                     }
-                    _ => {
-                        section_label(card, fonts, "3D ASSETS");
-                        label_text(
-                            card,
-                            fonts,
-                            "No asset packs bundled yet — worlds are procedural for now.",
-                            11.5,
-                            theme::text_muted(),
-                            false,
-                        );
-                    }
-                }
 
-                spacer(card, 14.0);
-                section_label(
-                    card,
-                    fonts,
-                    &format!("OPEN-SOURCE SOFTWARE · {}", SOFTWARE_CREDITS.len()),
-                );
-                for (name, detail, author, license) in SOFTWARE_CREDITS {
-                    credit_row(card, fonts, name, detail, author, license, accent);
-                }
+                    spacer(rows, 14.0);
+                    section_label(
+                        rows,
+                        fonts,
+                        &format!("OPEN-SOURCE SOFTWARE · {}", SOFTWARE_CREDITS.len()),
+                    );
+                    for (name, detail, author, license) in SOFTWARE_CREDITS {
+                        credit_row(rows, fonts, name, detail, author, license, accent);
+                    }
+                });
             });
         });
 }
@@ -202,6 +217,27 @@ const SOFTWARE_CREDITS: &[(&str, &str, &str, &str)] = &[
         "CC0 / Apache-2.0",
     ),
     ("rfd", "native folder picker", "PolyMeilex", "MIT"),
+    #[cfg(feature = "ml")]
+    (
+        "ONNX Runtime",
+        "local ML inference (optional `ml` feature)",
+        "Microsoft",
+        "MIT",
+    ),
+    #[cfg(feature = "ml")]
+    (
+        "rubato",
+        "audio resampling (optional `ml` feature)",
+        "Henrik Enquist",
+        "MIT",
+    ),
+    #[cfg(feature = "ml")]
+    (
+        "CLAP (LAION, Xenova ONNX)",
+        "zero-shot music understanding (optional `ml` feature)",
+        "LAION / Xenova",
+        "CC-BY-NC-4.0 weights",
+    ),
 ];
 
 /// An uppercase section header inside the credits list.

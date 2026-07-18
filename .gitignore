@@ -4,3 +4,7 @@
 # and at packaging time (PLAN.md §5). Fonts README stays tracked.
 /assets/models
 /dist
+# CLAP models (M5) are a download (scripts/fetch-clap.sh), never committed —
+# only the small precomputed mood_text_embeddings.json is tracked.
+/assets/ml/*.onnx
+/assets/ml/tokenizer.json
