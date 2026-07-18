@@ -305,6 +305,41 @@ pub fn apply_seek(
     }
 }
 
+/// Drive the music sub-track's volume from the user fader combined with the
+/// current track's loudness normalization (both in dB). Re-tweens only on a
+/// meaningful change so it doesn't restart the tween every frame.
+pub fn apply_volume(
+    player: Res<AudioPlayer>,
+    volume: Res<crate::Volume>,
+    analysis: Res<crate::analysis::AnalysisStore>,
+    playback: Res<Playback>,
+    mut last_db: Local<Option<f32>>,
+) {
+    if playback.queue.is_empty() {
+        return;
+    }
+    let id = playback.track().id.as_deref();
+    let norm_db = analysis.norm_db_for(id);
+    // Amplitude fader in dB: 1.0 → 0 dB, 0.5 → -6 dB, 0 → silence.
+    let user_db = if volume.0 <= 0.001 {
+        -80.0
+    } else {
+        20.0 * volume.0.log10()
+    };
+    let total_db = (norm_db + user_db).clamp(-80.0, 12.0);
+    if last_db.is_some_and(|d| (d - total_db).abs() < 0.1) {
+        return;
+    }
+    *last_db = Some(total_db);
+
+    let mut guard = player.0.lock().unwrap();
+    if let Some(inner) = guard.as_mut() {
+        inner
+            .track
+            .set_volume(kira::Decibels(total_db), tween_ms(120));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Library import
 // ---------------------------------------------------------------------------

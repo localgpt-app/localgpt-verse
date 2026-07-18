@@ -36,6 +36,14 @@ const LOOKAHEAD: usize = 4;
 // Sidecar
 // ---------------------------------------------------------------------------
 
+/// Sidecar schema stamp. New fields are `#[serde(default)]`, so older
+/// sidecars still load (missing data simply reads as `None`) — no forced
+/// re-analysis, no pin loss. Bump only on an incompatible change.
+const SIDECAR_VERSION: u32 = 2;
+
+/// Reference loudness for playback normalization (streaming/broadcast norm).
+pub const TARGET_LUFS: f32 = -14.0;
+
 /// One track's analysis, serialized as a JSON sidecar.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackAnalysis {
@@ -52,6 +60,10 @@ pub struct TrackAnalysis {
     pub energy: Vec<f32>,
     /// Mood index into [`crate::theme::MOODS`] from the quadrant mapping.
     pub mood: usize,
+    /// Integrated loudness (LUFS) for playback normalization; `None` when
+    /// measurement failed (silence/too short).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loudness_lufs: Option<f32>,
     /// "Keep this world": a pinned mood that overrides `mood` (PLAN.md §5.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_mood: Option<usize>,
@@ -110,7 +122,21 @@ fn save_sidecar(key: &str, analysis: &TrackAnalysis) {
 
 /// Decode to mono at ~`max_sr` by boxcar decimation (native rate when
 /// `max_sr` exceeds the source rate). Returns samples and the actual rate.
+/// Used by the CLAP resampler (`ml` feature); loudness callers use
+/// [`decode_mono_full`].
+#[cfg_attr(not(feature = "ml"), allow(dead_code))]
 pub(crate) fn decode_mono(path: &Path, max_sr: u32) -> Option<(Vec<f32>, u32)> {
+    decode_mono_full(path, max_sr, false).map(|(s, sr, _)| (s, sr))
+}
+
+/// Decode to decimated mono; optionally measure integrated loudness (EBU
+/// R128) on the *pre-decimation* mono at the source rate, where K-weighting
+/// is accurate.
+fn decode_mono_full(
+    path: &Path,
+    max_sr: u32,
+    measure_loudness: bool,
+) -> Option<(Vec<f32>, u32, Option<f32>)> {
     use symphonia::core::audio::SampleBuffer;
     use symphonia::core::codecs::DecoderOptions;
     use symphonia::core::formats::FormatOptions;
@@ -140,6 +166,13 @@ pub(crate) fn decode_mono(path: &Path, max_sr: u32) -> Option<(Vec<f32>, u32)> {
         .make(&track.codec_params, &DecoderOptions::default())
         .ok()?;
 
+    let mut meter = if measure_loudness {
+        ebur128::EbuR128::new(1, src_sr, ebur128::Mode::I).ok()
+    } else {
+        None
+    };
+    let mut meter_chunk: Vec<f32> = Vec::new();
+
     let decim = (src_sr / max_sr).max(1) as usize;
     let out_sr = src_sr / decim as u32;
     let max_samples = (MAX_ANALYSIS_SECS * out_sr as f32) as usize;
@@ -164,8 +197,13 @@ pub(crate) fn decode_mono(path: &Path, max_sr: u32) -> Option<(Vec<f32>, u32)> {
         };
         buf.copy_interleaved_ref(decoded);
         let channels = spec.channels.count().max(1);
+        meter_chunk.clear();
+        let mut hit_cap = false;
         for frame in buf.samples().chunks_exact(channels) {
             let mono: f32 = frame.iter().sum::<f32>() / channels as f32;
+            if meter.is_some() {
+                meter_chunk.push(mono);
+            }
             acc += mono;
             acc_n += 1;
             if acc_n == decim {
@@ -173,15 +211,28 @@ pub(crate) fn decode_mono(path: &Path, max_sr: u32) -> Option<(Vec<f32>, u32)> {
                 acc = 0.0;
                 acc_n = 0;
                 if out.len() >= max_samples {
-                    return Some((out, out_sr));
+                    hit_cap = true;
+                    break;
                 }
             }
+        }
+        // Feed the loudness meter its (pre-decimation) mono for this packet.
+        if let Some(m) = meter.as_mut() {
+            let _ = m.add_frames_f32(&meter_chunk);
+        }
+        if hit_cap {
+            break;
         }
     }
     if out.len() < out_sr as usize {
         return None; // under a second of audio — not worth analyzing
     }
-    Some((out, out_sr))
+    // -inf/NaN (silence, or too little gated content) → no measurement.
+    let loudness = meter
+        .and_then(|m| m.loudness_global().ok())
+        .map(|l| l as f32)
+        .filter(|l| l.is_finite() && *l > -70.0);
+    Some((out, out_sr, loudness))
 }
 
 // ---------------------------------------------------------------------------
@@ -439,7 +490,7 @@ fn map_mood(bpm: f32, mean_energy: f32, mean_centroid_hz: f32) -> usize {
 
 /// Full pipeline for one file.
 fn analyze(path: &Path) -> Option<TrackAnalysis> {
-    let (samples, sr) = decode_mono(path, ANALYSIS_SR)?;
+    let (samples, sr, loudness_lufs) = decode_mono_full(path, ANALYSIS_SR, true)?;
     let duration = samples.len() as f32 / sr as f32;
     let sweep = spectral_sweep(&samples, sr);
 
@@ -454,13 +505,14 @@ fn analyze(path: &Path) -> Option<TrackAnalysis> {
     let mood = map_mood(bpm, mean_energy, mean_centroid);
 
     Some(TrackAnalysis {
-        version: 1,
+        version: SIDECAR_VERSION,
         duration,
         bpm,
         beat_offset,
         sections,
         energy,
         mood,
+        loudness_lufs,
         pinned_mood: None,
         pinned_seed: None,
         embedding: None,
@@ -552,6 +604,16 @@ impl AnalysisStore {
             .get(id)
             .filter(|a| a.bpm > 0.0)
             .map(|a| a.beat_offset)
+    }
+
+    /// Normalization gain in **decibels** for `id` toward [`TARGET_LUFS`],
+    /// clamped to ±12 dB so a mismeasured quiet track can't blast. `0.0` (no
+    /// change) when the track isn't analyzed yet or loudness was unmeasurable.
+    pub fn norm_db_for(&self, id: Option<&str>) -> f32 {
+        id.and_then(|id| self.map.get(id))
+            .and_then(|a| a.loudness_lufs)
+            .map(|lufs| (TARGET_LUFS - lufs).clamp(-12.0, 12.0))
+            .unwrap_or(0.0)
     }
 
     fn request(&mut self, id: &str, path: &Path) {

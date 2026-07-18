@@ -153,6 +153,17 @@ pub struct AudioActive(pub bool);
 #[derive(Resource, Default)]
 pub struct SeekRequest(pub Option<f32>);
 
+/// User playback volume, 0..1 (a perceptual fader; see `audio::apply_volume`).
+/// Combined with per-track loudness normalization on the music sub-track.
+#[derive(Resource)]
+pub struct Volume(pub f32);
+
+impl Default for Volume {
+    fn default() -> Self {
+        Self(0.85)
+    }
+}
+
 /// The world's timescale (1.0 playing, eases to ~0.05 when paused).
 #[derive(Resource)]
 pub struct WorldClock {
@@ -201,6 +212,7 @@ fn main() {
     .init_resource::<world::PaletteWash>()
     .init_resource::<AudioActive>()
     .init_resource::<SeekRequest>()
+    .init_resource::<Volume>()
     .init_resource::<audio::AudioPlayer>()
     .init_resource::<audio::AudioTap>()
     .init_resource::<audio::ImportState>()
@@ -257,6 +269,7 @@ fn main() {
             audio::sync_track_playback,
             audio::sync_pause,
             audio::apply_seek,
+            audio::apply_volume,
             audio::sync_clock,
         )
             .chain()
@@ -576,8 +589,17 @@ fn input_in_world(
     mut theme: ResMut<Theme>,
     mut intensity: ResMut<WorldIntensity>,
     mut seek: ResMut<SeekRequest>,
+    mut volume: ResMut<Volume>,
 ) {
     let mut wake = keys.get_just_pressed().len() > 0 || motion.delta != Vec2::ZERO;
+
+    // Volume: -/= (and numpad) nudge the fader; the apply system tweens it.
+    if keys.just_pressed(KeyCode::Minus) || keys.just_pressed(KeyCode::NumpadSubtract) {
+        volume.0 = (volume.0 - 0.05).max(0.0);
+    }
+    if keys.just_pressed(KeyCode::Equal) || keys.just_pressed(KeyCode::NumpadAdd) {
+        volume.0 = (volume.0 + 0.05).min(1.0);
+    }
 
     if keys.just_pressed(KeyCode::Escape) {
         // Close the topmost overlay first; only pause when nothing else is up.
