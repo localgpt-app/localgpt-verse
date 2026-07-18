@@ -104,6 +104,13 @@ pub(crate) struct ProgressFill;
 #[derive(Component)]
 pub(crate) struct ProgressPlayhead;
 #[derive(Component)]
+pub(crate) struct ProgressBar;
+#[derive(Component)]
+pub(crate) struct SectionNotch;
+/// Invisible full-width strip over the progress bar — click/drag to seek.
+#[derive(Component)]
+pub(crate) struct SeekStrip;
+#[derive(Component)]
 pub(crate) struct ModeTab(CameraMode);
 #[derive(Component)]
 pub(crate) struct Reticle;
@@ -318,6 +325,7 @@ pub fn setup_hud(
 
             // --- Progress bar (beat-reactive) --------------------------------
             root.spawn((
+                ProgressBar,
                 Node {
                     position_type: PositionType::Absolute,
                     bottom: Val::Px(0.0),
@@ -350,24 +358,9 @@ pub fn setup_hud(
                         target: FadeTarget::Bg,
                     },
                 ));
-                // Section notches.
+                // Section notches (kept in sync by `update_section_notches`).
                 for f in &playback.sections {
-                    bar.spawn((
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: Val::Percent(f * 100.0),
-                            bottom: Val::Px(0.0),
-                            width: Val::Px(1.0),
-                            height: Val::Px(7.0),
-                            ..default()
-                        },
-                        BackgroundColor(theme::hairline().with_alpha(0.4)),
-                        Fade {
-                            group: FadeGroup::Minimal,
-                            base: theme::hairline().with_alpha(0.4),
-                            target: FadeTarget::Bg,
-                        },
-                    ));
+                    spawn_notch(bar, *f);
                 }
                 // Playhead.
                 bar.spawn((
@@ -393,6 +386,21 @@ pub fn setup_hud(
                     },
                 ));
             });
+
+            // --- Seek strip: a tall invisible hit area over the hairline bar --
+            root.spawn((
+                SeekStrip,
+                Button,
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Px(0.0),
+                    left: Val::Px(0.0),
+                    width: Val::Percent(100.0),
+                    height: Val::Px(16.0),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ));
 
             // --- Explore reticle (survives into Hidden) ----------------------
             root.spawn((
@@ -751,4 +759,81 @@ pub fn chip_clicks(
             }
         }
     }
+}
+
+/// One section notch on the progress bar.
+fn spawn_notch(parent: &mut ChildSpawnerCommands<'_>, fraction: f32) {
+    parent.spawn((
+        SectionNotch,
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Percent(fraction * 100.0),
+            bottom: Val::Px(0.0),
+            width: Val::Px(1.0),
+            height: Val::Px(7.0),
+            ..default()
+        },
+        BackgroundColor(theme::hairline().with_alpha(0.4)),
+        Fade {
+            group: FadeGroup::Minimal,
+            base: theme::hairline().with_alpha(0.4),
+            target: FadeTarget::Bg,
+        },
+    ));
+}
+
+/// Respawn the section notches when the analyzed sections change (they were
+/// previously spawned once at setup and went stale on every track change).
+pub fn update_section_notches(
+    playback: Res<Playback>,
+    mut commands: Commands,
+    bar_q: Query<Entity, With<ProgressBar>>,
+    notch_q: Query<Entity, With<SectionNotch>>,
+    mut last: Local<Option<Vec<f32>>>,
+) {
+    if last.as_ref() == Some(&playback.sections) {
+        return;
+    }
+    *last = Some(playback.sections.clone());
+    for e in &notch_q {
+        commands.entity(e).despawn();
+    }
+    let Ok(bar) = bar_q.single() else { return };
+    commands.entity(bar).with_children(|parent| {
+        for f in &playback.sections {
+            spawn_notch(parent, *f);
+        }
+    });
+}
+
+/// Click/drag on the seek strip scrubs the song: cursor x over the window
+/// width is the target fraction (the bar spans the full width).
+pub fn seek_strip_scrub(
+    strip_q: Query<&Interaction, With<SeekStrip>>,
+    window_q: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    playback: Res<Playback>,
+    mut seek: ResMut<crate::SeekRequest>,
+    mut activity: ResMut<HudActivity>,
+    mut last_sent: Local<Option<f32>>,
+) {
+    let pressed = strip_q.iter().any(|i| *i == Interaction::Pressed);
+    if !pressed {
+        *last_sent = None;
+        return;
+    }
+    let Ok(window) = window_q.single() else {
+        return;
+    };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
+    let frac = (cursor.x / window.width().max(1.0)).clamp(0.0, 1.0);
+    // Throttle: only send when the target moved meaningfully (drag-scrub
+    // would otherwise issue a decoder seek every frame).
+    if last_sent.is_some_and(|f| (f - frac).abs() < 0.005) {
+        return;
+    }
+    *last_sent = Some(frac);
+    seek.0 = Some(frac * playback.duration());
+    activity.wake();
 }

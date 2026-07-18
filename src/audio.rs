@@ -68,6 +68,10 @@ struct AudioInner {
     /// Path the current handle was started for — path-keyed (not index) so a
     /// queue reorder doesn't restart the playing track (ARCHITECTURE R5).
     playing: Option<PathBuf>,
+    /// A seek in flight: hold `elapsed` at the target until the stream's
+    /// readback catches up (or the frame budget runs out), so the progress
+    /// bar doesn't snap backwards for a few frames.
+    seek_hold: Option<(f32, u8)>,
     /// One-time "clock live" log for smoke verification.
     clock_logged: bool,
 }
@@ -98,6 +102,7 @@ pub fn init_audio(player: ResMut<AudioPlayer>, tap: Res<AudioTap>) {
                         fading_out: None,
                         fade_in_next: None,
                         playing: None,
+                        seek_hold: None,
                         clock_logged: false,
                     });
                     info!("Audio device ready");
@@ -224,7 +229,19 @@ pub fn sync_clock(
         return;
     };
     let pos = handle.position() as f32;
-    playback.elapsed = pos;
+    match &mut inner.seek_hold {
+        Some((target, frames_left)) => {
+            if (pos - *target).abs() < 0.3 || *frames_left == 0 {
+                inner.seek_hold = None;
+                playback.elapsed = pos;
+            } else {
+                *frames_left -= 1;
+                playback.elapsed = *target;
+            }
+        }
+        None => playback.elapsed = pos,
+    }
+    let pos = playback.elapsed;
     if !inner.clock_logged && pos > 0.25 {
         inner.clock_logged = true;
         info!("Audio clock live: {pos:.2}s");
@@ -263,6 +280,28 @@ pub fn sync_clock(
         );
         let mood = playback.advance();
         theme.mood = mood;
+    }
+}
+
+/// Consume a pending [`crate::SeekRequest`]: seek the live stream (holding
+/// the UI clock at the target until the readback catches up) or, on the
+/// simulated path, just move the clock.
+pub fn apply_seek(
+    player: Res<AudioPlayer>,
+    mut seek: ResMut<crate::SeekRequest>,
+    mut playback: ResMut<Playback>,
+) {
+    let Some(target) = seek.0.take() else { return };
+    let duration = playback.duration();
+    let target = target.clamp(0.0, (duration - 0.1).max(0.0));
+    playback.elapsed = target;
+
+    let mut guard = player.0.lock().unwrap();
+    if let Some(inner) = guard.as_mut()
+        && let Some(handle) = &mut inner.handle
+    {
+        handle.seek_to(target as f64);
+        inner.seek_hold = Some((target, 30));
     }
 }
 

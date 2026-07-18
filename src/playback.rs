@@ -122,6 +122,16 @@ impl Playback {
     pub fn fraction(&self) -> f32 {
         (self.elapsed / self.duration().max(1.0)).clamp(0.0, 1.0)
     }
+    /// Step back to the previous song, returning its mood index. (Callers
+    /// implement the "restart if >3s in" convention with a seek instead.)
+    pub fn previous(&mut self) -> usize {
+        let len = self.queue.len().max(1);
+        self.current = (self.current + len - 1) % len;
+        self.elapsed = 0.0;
+        self.revision += 1;
+        self.track().mood
+    }
+
     /// Advance to the next song, returning its mood index.
     pub fn advance(&mut self) -> usize {
         self.current = (self.current + 1) % self.queue.len();

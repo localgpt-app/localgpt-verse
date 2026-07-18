@@ -147,6 +147,12 @@ pub struct Comfort {
 #[derive(Resource, Default)]
 pub struct AudioActive(pub bool);
 
+/// A pending transport seek, in seconds. Written by the seek strip / arrow
+/// keys, consumed by `audio::apply_seek` (which also handles the silent
+/// simulated path).
+#[derive(Resource, Default)]
+pub struct SeekRequest(pub Option<f32>);
+
 /// The world's timescale (1.0 playing, eases to ~0.05 when paused).
 #[derive(Resource)]
 pub struct WorldClock {
@@ -194,6 +200,7 @@ fn main() {
     .init_resource::<WorldClock>()
     .init_resource::<world::PaletteWash>()
     .init_resource::<AudioActive>()
+    .init_resource::<SeekRequest>()
     .init_resource::<audio::AudioPlayer>()
     .init_resource::<audio::AudioTap>()
     .init_resource::<audio::ImportState>()
@@ -249,6 +256,7 @@ fn main() {
         (
             audio::sync_track_playback,
             audio::sync_pause,
+            audio::apply_seek,
             audio::sync_clock,
         )
             .chain()
@@ -273,29 +281,37 @@ fn main() {
             .chain()
             .run_if(in_state(AppState::InWorld)),
     )
-    // In-world: input, HUD, overlays.
+    // In-world: input, HUD, overlays (nested groups — flat tuples cap at 20).
     .add_systems(
         Update,
         (
-            input_in_world,
-            world_assets::populate_world_props,
-            world_assets::rise_props,
-            hud::hud_depth,
-            hud::apply_hud_alpha,
-            hud::update_hud_accent,
-            hud::update_hud_content,
-            hud::update_mode_tabs,
-            hud::update_reticle,
-            hud::mode_tab_clicks,
-            hud::chip_clicks,
-            overlays::sync_pause_overlay,
-            overlays::sync_queue_overlay,
-            overlays::sync_settings_overlay,
-            overlays::sync_credits_overlay,
-            overlays::sync_library_overlay,
-            overlays::handle_world_cards,
-            overlays::update_intensity_knob,
-            overlays::update_comfort_toggles,
+            (
+                input_in_world,
+                world_assets::populate_world_props,
+                world_assets::rise_props,
+            ),
+            (
+                hud::hud_depth,
+                hud::apply_hud_alpha,
+                hud::update_hud_accent,
+                hud::update_hud_content,
+                hud::update_mode_tabs,
+                hud::update_reticle,
+                hud::update_section_notches,
+                hud::seek_strip_scrub,
+                hud::mode_tab_clicks,
+                hud::chip_clicks,
+            ),
+            (
+                overlays::sync_pause_overlay,
+                overlays::sync_queue_overlay,
+                overlays::sync_settings_overlay,
+                overlays::sync_credits_overlay,
+                overlays::sync_library_overlay,
+                overlays::handle_world_cards,
+                overlays::update_intensity_knob,
+                overlays::update_comfort_toggles,
+            ),
         )
             .run_if(in_state(AppState::InWorld)),
     )
@@ -344,6 +360,7 @@ fn smoke_drive(
     mut comfort: ResMut<Comfort>,
     mut photo: ResMut<Photo>,
     mut onboarding: ResMut<Onboarding>,
+    mut seek: ResMut<SeekRequest>,
     mut exit: MessageWriter<AppExit>,
     mut commands: Commands,
     mut phase: Local<u8>,
@@ -357,8 +374,14 @@ fn smoke_drive(
         if t > 0.5 && *state.get() == AppState::FirstRun {
             next.set(AppState::InWorld);
         }
-        if t > 6.0 && *phase == 0 {
+        if t > 4.0 && *phase == 0 {
             *phase = 1;
+            // Seek probe: jumping near the end should trigger the crossfade
+            // within a second (observable in the logs).
+            seek.0 = Some(8.0);
+        }
+        if t > 6.0 && *phase == 1 {
+            *phase = 2;
             shot(&mut commands, &dir, "reverie-world.png");
         }
         if t > 8.0 {
@@ -552,6 +575,7 @@ fn input_in_world(
     mut playback: ResMut<Playback>,
     mut theme: ResMut<Theme>,
     mut intensity: ResMut<WorldIntensity>,
+    mut seek: ResMut<SeekRequest>,
 ) {
     let mut wake = keys.get_just_pressed().len() > 0 || motion.delta != Vec2::ZERO;
 
@@ -577,10 +601,23 @@ fn input_in_world(
     if keys.just_pressed(KeyCode::KeyE) {
         beat.pulse = 1.0;
     }
-    if keys.just_pressed(KeyCode::KeyN) {
+    if keys.just_pressed(KeyCode::KeyN) || keys.just_pressed(KeyCode::MediaTrackNext) {
         // Next track (the audio player follows `current` and fades over).
         let mood = playback.advance();
         theme.mood = mood;
+    }
+    if keys.just_pressed(KeyCode::KeyB) || keys.just_pressed(KeyCode::MediaTrackPrevious) {
+        // Previous: restart if >3s in (the usual convention), else go back.
+        if playback.elapsed > 3.0 {
+            seek.0 = Some(0.0);
+        } else {
+            let mood = playback.previous();
+            theme.mood = mood;
+        }
+    }
+    if keys.just_pressed(KeyCode::MediaPlayPause) {
+        paused.0 = !paused.0;
+        playback.playing = !paused.0;
     }
     if keys.just_pressed(KeyCode::KeyF) {
         *mode = match *mode {
@@ -602,6 +639,14 @@ fn input_in_world(
         }
         if keys.just_pressed(KeyCode::ArrowRight) {
             intensity.0 = (intensity.0 + 0.05).min(1.0);
+        }
+    } else {
+        // Unpaused, the arrows scrub the song (±5s).
+        if keys.just_pressed(KeyCode::ArrowLeft) {
+            seek.0 = Some((playback.elapsed - 5.0).max(0.0));
+        }
+        if keys.just_pressed(KeyCode::ArrowRight) {
+            seek.0 = Some(playback.elapsed + 5.0);
         }
     }
 
