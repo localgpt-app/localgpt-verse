@@ -169,6 +169,16 @@ attribution already wired through the manifest → Credits screen.
 >   algorithmic ambient tracks, ~4 MB, CC0-1.0): auto-loaded on first run
 >   through the same import path as user music, so the app **plays
 >   immediately** without a folder pick. `bundle.sh` ships `assets/music/`.
+> - **Shuffle + repeat** (queue-panel pills, spec 1l): playback sequences
+>   through an explicit order (Fisher–Yates while shuffled, current kept
+>   playing on toggle, fresh permutation each pass; `previous` retraces).
+>   Repeat Off stops at the end of the order; One replays in place; the
+>   crossfade target and HUD "next" always match the mode.
+> - **Library rebuilt as the spec-1i music browser**: sidebar (search
+>   affordance, Import/Settings, worlds-as-playlists with counts, privacy
+>   line) + scrollable `# / TITLE / ALBUM / WORLD / LENGTH` table; row click
+>   plays that song and enters its world; Play/Shuffle start the filtered
+>   set. The old mood-card grid is gone — world jumping goes through songs.
 >
 > **M7 remains the deferred tier** (Beat This!/WFC/LLM recipes/Demucs):
 > `beat-this` (a 1.0.0 Rust+ONNX wrap of Beat This!) appeared on crates.io
