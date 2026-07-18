@@ -8,3 +8,5 @@
 # only the small precomputed mood_text_embeddings.json is tracked.
 /assets/ml/*.onnx
 /assets/ml/tokenizer.json
+# Starter music: source of truth is reverie-assets/music, copied in for dev
+/assets/music

@@ -366,6 +366,7 @@ pub fn start_import(folder: PathBuf, import: &mut ImportState) {
     std::thread::spawn(move || {
         for entry in walkdir::WalkDir::new(&folder)
             .follow_links(true)
+            .sort_by_file_name() // deterministic queue order across platforms
             .into_iter()
             .flatten()
         {

@@ -31,5 +31,15 @@ else
   echo "    warn: $ASSETS_REPO/models not found — bundling without the 3D pack (procedural worlds)"
 fi
 
+if [ -f "$ASSETS_REPO/music/music.json" ]; then
+  # CC0 starter music so the app has something to play on first run.
+  mkdir -p dist/assets/music
+  cp "$ASSETS_REPO"/music/*.mp3 "$ASSETS_REPO"/music/music.json dist/assets/music/
+  [ -f "$ASSETS_REPO/music/NOTICE" ] && cp "$ASSETS_REPO/music/NOTICE" dist/assets/music/
+  echo "    bundled $(ls "$ASSETS_REPO"/music/*.mp3 | wc -l | tr -d ' ') CC0 starter tracks"
+else
+  echo "    warn: $ASSETS_REPO/music not found — shipping without starter music"
+fi
+
 du -sh dist
 echo "done: $(pwd)/dist — run ./reverie from inside dist/"

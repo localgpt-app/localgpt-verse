@@ -498,6 +498,14 @@ fn not_paused(paused: Res<Paused>) -> bool {
 fn auto_import(mut import: ResMut<audio::ImportState>) {
     if let Ok(dir) = std::env::var("REVERIE_IMPORT") {
         audio::start_import(std::path::PathBuf::from(dir), &mut import);
+        return;
+    }
+    // No override → load the bundled CC0 starter pack (if present) so the user
+    // has something to play immediately, before importing their own folder.
+    // Flows through the same scan as user music (tags → analysis → worlds).
+    let starter = world_assets::asset_root().join("music");
+    if starter.join("music.json").exists() {
+        audio::start_import(starter, &mut import);
     }
 }
 
