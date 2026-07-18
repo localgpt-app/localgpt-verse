@@ -20,7 +20,7 @@ pub use actions::{
     overlay_scroll, queue_actions, world_actions,
 };
 pub use credits::sync_credits_overlay;
-pub use library::{handle_world_cards, sync_library_overlay};
+pub use library::{LibraryFilter, library_actions, sync_library_overlay};
 pub use onboarding::{despawn_first_run, refresh_onboarding, spawn_first_run};
 pub use pause::{sync_pause_overlay, update_intensity_knob};
 pub use queue::sync_queue_overlay;

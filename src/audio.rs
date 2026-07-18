@@ -412,9 +412,11 @@ fn read_track(path: &Path) -> Option<Track> {
     let artist = tag
         .and_then(|t| t.artist().map(|s| s.into_owned()))
         .unwrap_or_else(|| "Unknown Artist".into());
+    let album = tag.and_then(|t| t.album().map(|s| s.into_owned()));
     Some(Track {
         title,
         artist,
+        album,
         duration,
         mood: path_mood(path),
         section: "Your library".into(),

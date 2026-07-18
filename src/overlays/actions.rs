@@ -39,6 +39,12 @@ pub enum ButtonAction {
     /// Queue-panel transport pills (spec 1l).
     ToggleShuffle,
     CycleRepeat,
+    /// Library browser (spec 1i): play a queue index (row / Play button),
+    /// filter the table to a world (or all), or shuffle-play the filter.
+    PlayIndex(usize),
+    FilterWorld(usize),
+    FilterAll,
+    LibraryShuffle,
     Quit,
 }
 

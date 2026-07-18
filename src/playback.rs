@@ -14,6 +14,8 @@ use bevy::prelude::*;
 pub struct Track {
     pub title: String,
     pub artist: String,
+    /// Album tag, when present — the Library browser's ALBUM column (spec 1i).
+    pub album: Option<String>,
     /// Duration in seconds.
     pub duration: f32,
     /// Index into [`crate::theme::MOODS`] — the world this song imagines.
@@ -35,6 +37,7 @@ impl Track {
         Self {
             title: title.into(),
             artist: artist.into(),
+            album: None,
             duration,
             mood,
             section: section.into(),

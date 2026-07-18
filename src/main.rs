@@ -204,6 +204,7 @@ fn main() {
     .init_resource::<Paused>()
     .init_resource::<QueueOpen>()
     .init_resource::<OverlayStack>()
+    .init_resource::<overlays::LibraryFilter>()
     .init_resource::<Photo>()
     .init_resource::<Onboarding>()
     .init_resource::<WorldIntensity>()
@@ -249,6 +250,7 @@ fn main() {
                 overlays::comfort_actions,
                 overlays::app_actions,
                 overlays::queue_actions,
+                overlays::library_actions,
             ),
         )
             .chain(),
@@ -321,7 +323,6 @@ fn main() {
                 overlays::sync_settings_overlay,
                 overlays::sync_credits_overlay,
                 overlays::sync_library_overlay,
-                overlays::handle_world_cards,
                 overlays::update_intensity_knob,
                 overlays::update_comfort_toggles,
             ),
