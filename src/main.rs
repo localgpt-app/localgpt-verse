@@ -633,8 +633,10 @@ fn input_in_world(
     }
     if keys.just_pressed(KeyCode::KeyN) || keys.just_pressed(KeyCode::MediaTrackNext) {
         // Next track (the audio player follows `current` and fades over).
-        let mood = playback.advance();
-        theme.mood = mood;
+        match playback.advance() {
+            Some(mood) => theme.mood = mood,
+            None => playback.playing = false, // repeat-off: end of queue
+        }
     }
     if keys.just_pressed(KeyCode::KeyB) || keys.just_pressed(KeyCode::MediaTrackPrevious) {
         // Previous: restart if >3s in (the usual convention), else go back.

@@ -36,6 +36,9 @@ pub enum ButtonAction {
         idx: usize,
         dir: i32,
     },
+    /// Queue-panel transport pills (spec 1l).
+    ToggleShuffle,
+    CycleRepeat,
     Quit,
 }
 
@@ -227,30 +230,34 @@ pub fn app_actions(mut actions: MessageReader<UiAction>, mut exit: MessageWriter
     }
 }
 
-/// Queue reorder (spec 1l): ↑/↓ swap a track with its neighbour. The
-/// now-playing track never moves — audio continues uninterrupted (playback
-/// is path-keyed, ARCHITECTURE R5) and the queue keeps its circular order.
+/// Queue-panel actions (spec 1l): ↑/↓ reorder, the shuffle + repeat pills,
+/// and jump-to-track. Reorder never moves the now-playing track — audio
+/// continues uninterrupted (path-keyed, ARCHITECTURE R5).
 pub fn queue_actions(mut actions: MessageReader<UiAction>, mut playback: ResMut<Playback>) {
     for UiAction(action) in actions.read() {
-        let ButtonAction::QueueMove { idx, dir } = action else {
-            continue;
-        };
-        let len = playback.queue.len();
-        if len < 2 || *idx >= len {
-            continue;
+        match action {
+            ButtonAction::QueueMove { idx, dir } => {
+                let len = playback.queue.len();
+                if len < 2 || *idx >= len {
+                    continue;
+                }
+                let other = *idx as i32 + dir;
+                let current = playback.current % len;
+                if other < 0 || other >= len as i32 {
+                    continue; // no wrap
+                }
+                let other = other as usize;
+                if *idx == current || other == current {
+                    continue; // never touch the now-playing slot
+                }
+                playback.queue.swap(*idx, other);
+                playback.resequence(); // keep order/pos consistent with `current`
+                playback.revision += 1;
+            }
+            ButtonAction::ToggleShuffle => playback.toggle_shuffle(),
+            ButtonAction::CycleRepeat => playback.cycle_repeat(),
+            _ => {}
         }
-        let other = *idx as i32 + dir;
-        let current = playback.current % len;
-        // No wrap, and swaps never touch the now-playing slot.
-        if other < 0 || other >= len as i32 {
-            continue;
-        }
-        let other = other as usize;
-        if *idx == current || other == current {
-            continue;
-        }
-        playback.queue.swap(*idx, other);
-        playback.revision += 1;
     }
 }
 

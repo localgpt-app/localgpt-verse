@@ -92,6 +92,33 @@ fn spawn_queue(commands: &mut Commands, fonts: &Fonts, theme: &Theme, playback: 
                 theme::text_muted(),
                 false,
             );
+
+            // Shuffle + repeat pills (spec 1l).
+            panel
+                .spawn(Node {
+                    column_gap: Val::Px(8.0),
+                    margin: UiRect::top(Val::Px(10.0)),
+                    ..default()
+                })
+                .with_children(|row| {
+                    pill(
+                        row,
+                        fonts,
+                        "Shuffle",
+                        ButtonAction::ToggleShuffle,
+                        playback.shuffle,
+                        accent,
+                    );
+                    pill(
+                        row,
+                        fonts,
+                        playback.repeat.label(),
+                        ButtonAction::CycleRepeat,
+                        playback.repeat != crate::playback::Repeat::Off,
+                        accent,
+                    );
+                });
+
             panel.spawn(Node {
                 height: Val::Px(14.0),
                 ..default()
@@ -203,6 +230,50 @@ fn queue_row(
                     move_button(row, fonts, if dir < 0 { "↑" } else { "↓" }, idx, dir);
                 }
             }
+        });
+}
+
+/// A transport pill (Shuffle / Repeat). Tinted with the world accent when
+/// active, muted when off.
+fn pill(
+    parent: &mut ChildSpawnerCommands<'_>,
+    fonts: &Fonts,
+    label: &str,
+    action: ButtonAction,
+    active: bool,
+    accent: Color,
+) {
+    let base = if active {
+        accent.with_alpha(0.22)
+    } else {
+        theme::veil_hud()
+    };
+    let text = if active { accent } else { theme::text_muted() };
+    parent
+        .spawn((
+            Button,
+            UiButton {
+                action,
+                primary: false,
+                base,
+            },
+            rounded(
+                Node {
+                    padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                RADIUS_SM,
+            ),
+            BackgroundColor(base),
+        ))
+        .with_children(|b| {
+            b.spawn((
+                Text::new(label.to_string()),
+                text_font(fonts.ui_medium.clone(), 11.5),
+                TextColor(text),
+            ));
         });
 }
 

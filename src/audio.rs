@@ -252,18 +252,22 @@ pub fn sync_clock(
         // fade window was missed) — mirror the simulated end-of-track path.
         inner.handle = None;
         inner.playing = None;
-        let mood = playback.advance();
-        theme.mood = mood;
+        match playback.advance() {
+            Some(mood) => theme.mood = mood,
+            None => playback.playing = false, // repeat-off: queue exhausted
+        }
         return;
     }
 
     // Begin the crossfade when A enters its final `cross` seconds. Single-
-    // track queues skip it (the same stream can't overlap itself).
+    // track queues (and the last track with repeat off) skip it — the same
+    // stream can't overlap itself and there may be nothing to cross to.
     let duration = playback.duration();
     let cross = crossfade_secs(duration);
     let remaining = duration - pos;
     if inner.fading_out.is_none()
         && playback.queue.len() > 1
+        && playback.has_next()
         && duration > 2.0
         && remaining > 0.05
         && remaining <= cross
@@ -278,8 +282,9 @@ pub fn sync_clock(
             "Crossfading to: {} ({cross:.1}s)",
             playback.next_track().title
         );
-        let mood = playback.advance();
-        theme.mood = mood;
+        if let Some(mood) = playback.advance() {
+            theme.mood = mood;
+        }
     }
 }
 
@@ -490,6 +495,7 @@ pub fn poll_import(
             }
             import.count += batch.len();
             playback.queue.append(&mut batch);
+            playback.resequence(); // keep order/pos valid as the queue grows
             playback.revision += 1;
         }
     }

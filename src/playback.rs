@@ -44,6 +44,36 @@ impl Track {
     }
 }
 
+/// Repeat mode for the queue.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Repeat {
+    /// Play to the end of the order, then stop.
+    Off,
+    /// Wrap forever (reshuffling each pass when shuffled). The default.
+    #[default]
+    All,
+    /// Replay the current track.
+    One,
+}
+
+impl Repeat {
+    /// Off → All → One → Off (the pill's cycle).
+    fn next(self) -> Self {
+        match self {
+            Repeat::Off => Repeat::All,
+            Repeat::All => Repeat::One,
+            Repeat::One => Repeat::Off,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Repeat::Off => "Repeat off",
+            Repeat::All => "Repeat all",
+            Repeat::One => "Repeat one",
+        }
+    }
+}
+
 /// The transport: what is playing, where we are, and what's next.
 #[derive(Resource)]
 pub struct Playback {
@@ -58,6 +88,14 @@ pub struct Playback {
     /// Bumped on queue/current changes (advance, import, reorder) so UI
     /// panels can refresh without diffing the queue every frame.
     pub revision: u64,
+    pub shuffle: bool,
+    pub repeat: Repeat,
+    /// Play order over `queue` indices — identity, or a permutation while
+    /// shuffled. `current == order[pos]` is the invariant.
+    order: Vec<usize>,
+    pos: usize,
+    /// Shuffle PRNG state.
+    rng: u64,
 }
 
 impl Default for Playback {
@@ -97,6 +135,7 @@ impl Default for Playback {
                 "Glass Expanse · Late",
             ),
         ];
+        let order = (0..queue.len()).collect();
         Self {
             elapsed: 161.0, // 2:41, matching the hero mockup
             current: 0,
@@ -104,6 +143,11 @@ impl Default for Playback {
             sections: vec![0.0, 0.18, 0.42, 0.63, 0.85],
             queue,
             revision: 0,
+            shuffle: false,
+            repeat: Repeat::default(),
+            order,
+            pos: 0,
+            rng: 0x9E37_79B9_7F4A_7C15,
         }
     }
 }
@@ -112,8 +156,10 @@ impl Playback {
     pub fn track(&self) -> &Track {
         &self.queue[self.current % self.queue.len()]
     }
+    /// The track queued to play next (honours shuffle + repeat), for the HUD
+    /// "next" preview and the crossfade target.
     pub fn next_track(&self) -> &Track {
-        &self.queue[(self.current + 1) % self.queue.len()]
+        &self.queue[self.peek_next() % self.queue.len()]
     }
     pub fn duration(&self) -> f32 {
         self.track().duration
@@ -122,22 +168,100 @@ impl Playback {
     pub fn fraction(&self) -> f32 {
         (self.elapsed / self.duration().max(1.0)).clamp(0.0, 1.0)
     }
-    /// Step back to the previous song, returning its mood index. (Callers
-    /// implement the "restart if >3s in" convention with a seek instead.)
+
+    /// Queue index that will play after `current` (repeat-one → itself,
+    /// otherwise the next slot in `order`, wrapping).
+    fn peek_next(&self) -> usize {
+        if self.repeat == Repeat::One || self.order.is_empty() {
+            return self.current;
+        }
+        self.order[(self.pos + 1) % self.order.len()]
+    }
+
+    /// Whether a natural end has somewhere to go — false only at the end of
+    /// the order with repeat off (so the transport stops instead of wrapping).
+    pub fn has_next(&self) -> bool {
+        self.repeat != Repeat::Off || self.pos + 1 < self.order.len()
+    }
+
+    /// Rebuild `order`/`pos` from the queue + shuffle flag. Call after any
+    /// queue mutation (import, reorder) or a shuffle toggle.
+    pub fn resequence(&mut self) {
+        self.order = (0..self.queue.len()).collect();
+        if self.shuffle {
+            self.reshuffle(true);
+        }
+        self.pos = self
+            .order
+            .iter()
+            .position(|&i| i == self.current)
+            .unwrap_or(0);
+    }
+
+    /// Fisher–Yates over `order`. When `keep_current_front`, the current track
+    /// is moved to the front so toggling shuffle mid-song keeps it playing.
+    fn reshuffle(&mut self, keep_current_front: bool) {
+        let len = self.order.len();
+        for i in (1..len).rev() {
+            let j = (crate::world_assets::splitmix(&mut self.rng) % (i as u64 + 1)) as usize;
+            self.order.swap(i, j);
+        }
+        if keep_current_front && let Some(p) = self.order.iter().position(|&i| i == self.current) {
+            self.order.swap(0, p);
+        }
+    }
+
+    pub fn toggle_shuffle(&mut self) {
+        self.shuffle = !self.shuffle;
+        self.resequence();
+        self.revision += 1;
+    }
+
+    pub fn cycle_repeat(&mut self) {
+        self.repeat = self.repeat.next();
+        self.revision += 1;
+    }
+
+    /// Step back, returning its mood index. Walks back through `order` (so a
+    /// shuffled queue retraces its own history). Callers implement the
+    /// "restart if >3s in" convention with a seek instead.
     pub fn previous(&mut self) -> usize {
-        let len = self.queue.len().max(1);
-        self.current = (self.current + len - 1) % len;
+        let len = self.order.len().max(1);
+        self.pos = (self.pos + len - 1) % len;
+        self.current = self.order[self.pos.min(self.order.len().saturating_sub(1))];
         self.elapsed = 0.0;
         self.revision += 1;
         self.track().mood
     }
 
-    /// Advance to the next song, returning its mood index.
-    pub fn advance(&mut self) -> usize {
-        self.current = (self.current + 1) % self.queue.len();
+    /// Advance to the next song, returning its mood index — or `None` when the
+    /// queue is exhausted (repeat off at the end), meaning the caller stops.
+    pub fn advance(&mut self) -> Option<usize> {
+        if self.queue.is_empty() {
+            return None;
+        }
+        if self.repeat == Repeat::One {
+            // Replay in place.
+            self.elapsed = 0.0;
+            self.revision += 1;
+            return Some(self.track().mood);
+        }
+        if self.pos + 1 >= self.order.len() {
+            // End of the order.
+            if self.repeat == Repeat::Off {
+                return None;
+            }
+            if self.shuffle {
+                self.reshuffle(false); // fresh pass; may re-lead with any track
+            }
+            self.pos = 0;
+        } else {
+            self.pos += 1;
+        }
+        self.current = self.order[self.pos];
         self.elapsed = 0.0;
         self.revision += 1;
-        self.track().mood
+        Some(self.track().mood)
     }
 }
 
@@ -234,8 +358,10 @@ pub fn advance_playback(
     }
     playback.elapsed += dt;
     if playback.elapsed >= playback.duration() {
-        let mood = playback.advance();
-        theme.mood = mood;
+        match playback.advance() {
+            Some(mood) => theme.mood = mood,
+            None => playback.playing = false, // repeat-off: end of queue
+        }
     }
 }
 
@@ -263,12 +389,19 @@ mod tests {
         assert_eq!(p.fraction(), 1.0);
     }
 
+    /// Move the transport to a specific queue index (as the UI does).
+    fn seek_to(p: &mut Playback, idx: usize) {
+        p.current = idx;
+        p.resequence();
+    }
+
     #[test]
     fn advance_wraps_and_resets_elapsed() {
         let mut p = Playback::default();
-        p.current = p.queue.len() - 1;
+        let last = p.queue.len() - 1;
+        seek_to(&mut p, last);
         p.elapsed = 99.0;
-        let mood = p.advance();
+        let mood = p.advance().unwrap();
         assert_eq!(p.current, 0);
         assert_eq!(p.elapsed, 0.0);
         assert_eq!(mood, p.queue[0].mood);
@@ -277,7 +410,56 @@ mod tests {
     #[test]
     fn next_track_wraps_to_first() {
         let mut p = Playback::default();
-        p.current = p.queue.len() - 1;
+        let last = p.queue.len() - 1;
+        seek_to(&mut p, last);
         assert_eq!(p.next_track().title, p.queue[0].title);
+    }
+
+    #[test]
+    fn repeat_one_replays_in_place() {
+        let mut p = Playback::default();
+        seek_to(&mut p, 2);
+        p.repeat = Repeat::One;
+        assert_eq!(p.advance(), Some(p.queue[2].mood));
+        assert_eq!(p.current, 2);
+        assert_eq!(p.next_track().title, p.queue[2].title);
+    }
+
+    #[test]
+    fn repeat_off_stops_at_end() {
+        let mut p = Playback::default();
+        p.repeat = Repeat::Off;
+        let last = p.queue.len() - 1;
+        seek_to(&mut p, last);
+        assert!(!p.has_next());
+        assert_eq!(p.advance(), None);
+    }
+
+    #[test]
+    fn shuffle_visits_every_track_once_per_pass() {
+        let mut p = Playback::default();
+        let n = p.queue.len();
+        p.toggle_shuffle();
+        assert!(p.shuffle);
+        let mut seen = vec![p.current];
+        for _ in 0..n - 1 {
+            p.advance().unwrap();
+            seen.push(p.current);
+        }
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), n, "one shuffled pass covers every track once");
+    }
+
+    #[test]
+    fn previous_retraces_shuffled_order() {
+        let mut p = Playback::default();
+        p.toggle_shuffle();
+        let a = p.current;
+        p.advance().unwrap();
+        let b = p.current;
+        assert_ne!(a, b);
+        assert_eq!(p.previous(), p.queue[a].mood);
+        assert_eq!(p.current, a);
     }
 }
