@@ -42,14 +42,61 @@ opt-level = 3
 # PLAN.md M5 — CLAP zero-shot mood + audio embeddings. Opt-in: the model is a
 # ~78 MB download (scripts/fetch-clap.sh) and ort pulls ONNX Runtime binaries;
 # without the feature (or the model file) the app uses the rule mapper (M4).
+#
+# LICENSE NOTE (commercial shipping): CLAP weights (LAION) are CC-BY-NC-4.0 —
+# NOT commercial-friendly. The **rule mapper** (analysis.rs::map_mood, pure
+# Rust DSP, Apache-2.0) is the commercial shipping mood tier; `ml`/CLAP is an
+# opt-in, non-commercial "research quality boost". The app runs fully without
+# the `ml` feature. MERT is also CC-BY-NC, so it is not a clean swap.
+#
+# PLAN.md M7 — Demucs stem separation rides the `ml` feature via
+# `stem-splitter-core` (MIT OR Apache-2.0 — commercial-friendly), which wraps
+# htdemucs ONNX and owns the decode→chunk→separate→merge pipeline. Added with
+# --no-default-features so the coreml/cuda/directml backends stay off (CPU-only,
+# matching the existing `ort` default).
 [features]
-ml = ["dep:ort", "dep:rubato"]
+ml = ["dep:ort", "dep:rubato", "dep:stem-splitter-core"]
+# PLAN.md M7 — LLM-authored scene recipes (src/recipe.rs, src/llm.rs). Opt-in:
+# `mistralrs` builds a pure-Rust inference engine (CUDA/Metal via its own
+# optional features, off by default), and the GGUF model is a separate ~4–5 GB
+# download (scripts/fetch-bonsai.sh, or a standard-Q4_K_M fallback). Without the
+# feature (or the model file) the app keeps the rule-derived recipe (today's
+# path). `schemars` must match mistralrs's internal version (derive path) and
+# its `JsonSchema` bound on `generate_structured`; `tokio` drives the worker
+# thread's block_on runtime (mistralrs's build()/generate are async).
+llm = ["dep:mistralrs", "dep:schemars", "dep:tokio"]
 
 [dependencies.ort]
-# Pinned to the same rc the monorepo's fastembed uses (PLAN §0.6).
-version = "2.0.0-rc.12"
+# Pinned to rc.11 to match `stem-splitter-core` (which pins =2.0.0-rc.11). The
+# monorepo's fastembed uses rc.12, but Reverie is a standalone workspace and its
+# ort API usage (Session/Tensor/run) is identical across rc.11↔rc.12.
+version = "=2.0.0-rc.11"
 optional = true
 
 [dependencies.rubato]
 version = "0.16"
+optional = true
+
+# htdemucs stem separation (PLAN.md M7). MIT OR Apache-2.0. --no-default-features
+# keeps coreml/cuda/directml off (CPU-only). Owns the model fetch internally.
+[dependencies.stem-splitter-core]
+version = "1.2"
+default-features = false
+optional = true
+
+[dependencies.mistralrs]
+version = "0.8"
+optional = true
+
+# Must be the same major/minor mistralrs re-exports (`pub use schemars`) so the
+# `T: schemars::JsonSchema` bound on `Model::generate_structured` resolves to
+# the same trait. mistralrs 0.8.1 re-exports schemars 1.x; verify on the first
+# `cargo check --features llm` and bump in lockstep with mistralrs.
+[dependencies.schemars]
+version = "1"
+optional = true
+
+[dependencies.tokio]
+version = "1"
+features = ["rt"]
 optional = true

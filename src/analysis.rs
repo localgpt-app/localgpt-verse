@@ -24,7 +24,8 @@ use crate::playback::{Beat, Playback};
 use crate::theme::Theme;
 
 /// Analysis sample rate — plenty for onsets/brightness, cheap to decode into.
-const ANALYSIS_SR: u32 = 11_025;
+/// Sample rate the DSP analysis runs at (and Demucs stem RMS is reduced to).
+pub(crate) const ANALYSIS_SR: u32 = 11_025;
 /// Cap the analyzed span; longer tracks are judged by their first 8 minutes.
 const MAX_ANALYSIS_SECS: f32 = 480.0;
 const FFT_SIZE: usize = 1024;
@@ -76,9 +77,24 @@ pub struct TrackAnalysis {
     /// asset selection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding: Option<Vec<f32>>,
+
+    /// Demucs per-stem energy curves — drums/bass/vocals/other (PLAN.md M7,
+    /// `ml` feature, same `ort` runtime as CLAP). Each entry is a per-second
+    /// RMS envelope aligned to `energy`. `None` when the model is absent or
+    /// unconfirmed (src/demucs.rs); the renderer then falls back to the mixed
+    /// `energy` envelope. MIT-licensed model (shippable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stems: Option<crate::demucs::StemEnergy>,
+
+    /// LLM-authored scene recipe (PLAN.md M7, `llm` feature). The top rung of
+    /// the signal-ownership ladder; `None` when the model is absent or
+    /// generation failed. The renderer keeps the rule-derived path when `None`
+    /// or [`crate::recipe::WorldRecipe::is_empty`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipe: Option<crate::recipe::WorldRecipe>,
 }
 
-fn cache_dir() -> Option<PathBuf> {
+pub(crate) fn cache_dir() -> Option<PathBuf> {
     let dir = dirs::data_local_dir()?.join("reverie").join("analysis");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
@@ -516,6 +532,8 @@ fn analyze(path: &Path) -> Option<TrackAnalysis> {
         pinned_mood: None,
         pinned_seed: None,
         embedding: None,
+        stems: None,
+        recipe: None,
     })
 }
 
@@ -545,6 +563,13 @@ impl Default for AnalysisStore {
             // feature or the model file — rules keep running either way).
             #[cfg(feature = "ml")]
             let mut clap = crate::ml::ClapModel::try_load();
+            // M7 stem tier (rides the same `ort` runtime as CLAP). Below the
+            // recipe tier: stems are an input feature the recipe LLM consumes.
+            #[cfg(feature = "ml")]
+            let mut stems = crate::demucs::StemModel::try_load();
+            // M7 recipe tier — top rung. `llm` feature + model file required.
+            #[cfg(feature = "llm")]
+            let mut recipe_model = crate::llm::RecipeModel::try_load();
             for (id, path) in req_rx {
                 let analysis = match load_sidecar(&id) {
                     Some(a) => a,
@@ -582,6 +607,67 @@ impl Default for AnalysisStore {
                     },
                     _ => analysis,
                 };
+                // M7 stem upgrade pass: a sidecar with no stem curves gets them
+                // (separate rung from CLAP; reuses the same `ort` runtime).
+                #[cfg(feature = "ml")]
+                let analysis = match (stems.as_mut(), analysis.stems.is_none()) {
+                    (Some(model), true) => match model.analyze_track(&path) {
+                        Some(curves) => {
+                            info!("Demucs separated {} → 4 stems", path.display());
+                            let mut a = analysis;
+                            a.stems = Some(curves);
+                            save_sidecar(&id, &a);
+                            a
+                        }
+                        None => analysis,
+                    },
+                    _ => analysis,
+                };
+                // M7 recipe upgrade pass — the top rung. Only when the LLM
+                // feature + model are present, and the sidecar lacks a recipe.
+                #[cfg(feature = "llm")]
+                let analysis = match (recipe_model.as_mut(), analysis.recipe.is_none()) {
+                    (Some(model), true) => match model.generate(&analysis) {
+                        Some(recipe) => {
+                            info!(
+                                "LLM authored recipe \"{}\" for {}",
+                                recipe.world_name,
+                                path.display()
+                            );
+                            let mut a = analysis;
+                            a.recipe = Some(recipe);
+                            save_sidecar(&id, &a);
+                            a
+                        }
+                        None => analysis,
+                    },
+                    _ => analysis,
+                };
+                // M7 agent path — the gen-style alternative to the static
+                // recipe. Bonsai calls tools (spawn_primitive, set_light, ...)
+                // to construct the world entity-by-entity, issuing commands
+                // through the globally-installed bridge that the Bevy executor
+                // drains each frame. Skipped when the bridge isn't installed
+                // (feature off / not yet ready) or the model is absent.
+                //
+                // This runs *in addition to* the recipe tier: the recipe
+                // modulates the mood-driven base world, while the agent tier
+                // can layer authored primitives on top. The SceneBuild result
+                // isn't persisted to the sidecar (the commands are replayed
+                // live by the executor, so it's session-scoped).
+                #[cfg(feature = "llm")]
+                if let Some(bridge) = crate::agent::agent_bridge()
+                    && let Some(model) = recipe_model.as_mut()
+                {
+                    let m = model.model_mut();
+                    if let Some(build) = crate::agent::run_session(m, bridge, &analysis) {
+                        info!(
+                            "Agent built {} primitives for {}",
+                            build.commands.len(),
+                            path.display()
+                        );
+                    }
+                }
                 if res_tx.send((id, analysis)).is_err() {
                     return;
                 }
@@ -652,6 +738,7 @@ pub fn sync_analysis(
     mut beat: ResMut<Beat>,
     mut theme: ResMut<Theme>,
     mut layout: ResMut<crate::world_assets::WorldLayout>,
+    mut active_recipe: ResMut<crate::recipe::ActiveRecipe>,
     mut applied: Local<Option<(Option<String>, bool)>>,
 ) {
     if playback.queue.is_empty() {
@@ -718,6 +805,16 @@ pub fn sync_analysis(
                 .unwrap_or_else(|| crate::world_assets::path_seed(current_path.as_ref().unwrap()));
             playback.queue[idx].mood = mood;
             theme.mood = mood;
+            // M7: push the track's recipe (if any) to the live resource the
+            // renderer reads. A pinned seed overrides the recipe's seed so
+            // "Keep this world" stays deterministic even with an LLM recipe.
+            active_recipe.recipe = a.recipe.as_ref().map(|r| {
+                let mut r = r.clone();
+                if let Some(seed) = a.pinned_seed {
+                    r.seed = seed;
+                }
+                r
+            });
         }
         None => {
             // Demo track (no path) keeps its authored mock sections; a real
@@ -727,6 +824,7 @@ pub fn sync_analysis(
                 layout.seed = crate::world_assets::path_seed(path);
             }
             beat.grid = false;
+            active_recipe.recipe = None;
         }
     }
 }

@@ -304,6 +304,7 @@ pub fn populate_world_props(
     theme: Res<Theme>,
     layout: Res<WorldLayout>,
     assets: Res<WorldAssets>,
+    active_recipe: Res<crate::recipe::ActiveRecipe>,
     asset_server: Res<AssetServer>,
     analysis: Res<crate::analysis::AnalysisStore>,
     playback: Res<crate::playback::Playback>,
@@ -334,8 +335,15 @@ pub fn populate_world_props(
         .map(|offset| offset.clamp(1.3, 3.5))
         .unwrap_or(2.4);
 
+    // M7: a recipe may scale prop density within [0.3, 2.0] (already clamped).
+    // Absent recipe → 1.0 (today's per-tier counts).
+    let density = active_recipe.get().map(|r| r.density).unwrap_or(1.0);
+
     let entries: Vec<_> = manifest.assets.iter().filter(|a| a.mood == mood).collect();
-    let total: usize = entries.iter().map(|e| e.tier.count()).sum();
+    let total: usize = entries
+        .iter()
+        .map(|e| (e.tier.count() as f32 * density).round().max(1.0) as usize)
+        .sum();
 
     // Seeded per-mood arrangement: same (mood, seed) → identical world.
     let mut rng = layout.seed ^ (mood as u64).wrapping_mul(0x9E37_79B9);
@@ -344,7 +352,8 @@ pub fn populate_world_props(
         let handle: Handle<_> = asset_server
             .load(GltfAssetLabel::Scene(0).from_asset(format!("models/{}", entry.file)));
         let scale = entry.placement_scale();
-        for _ in 0..entry.tier.count() {
+        let count = (entry.tier.count() as f32 * density).round().max(1.0) as usize;
+        for _ in 0..count {
             let pos = layout_position(mood, placed, &mut rng);
             let scale = scale * (0.85 + rand01(&mut rng) * 0.3);
             let mut e = commands.spawn((
@@ -368,11 +377,71 @@ pub fn populate_world_props(
             placed += 1;
         }
     }
+
+    // M7: raise hero landmarks from the recipe, if any. Each landmark maps to
+    // the best-matching Hero-tier asset for the current mood, placed at its
+    // anchor (Center/Cardinal/Rim) with the recipe's scale. Empty list = the
+    // drifters carry the scene as before. The kind/anchor enums select layout,
+    // not specific assets (the asset set is mood-filtered, not kind-tagged).
+    if let Some(recipe) = active_recipe.get() {
+        let hero_entries: Vec<_> = manifest
+            .assets
+            .iter()
+            .filter(|a| a.mood == mood && a.tier == Tier::Hero)
+            .collect();
+        for (i, landmark) in recipe.landmarks.iter().enumerate() {
+            let Some(entry) = hero_entries.get(i % hero_entries.len()) else {
+                break;
+            };
+            let handle: Handle<_> = asset_server
+                .load(GltfAssetLabel::Scene(0).from_asset(format!("models/{}", entry.file)));
+            let pos = landmark_anchor(landmark.at, i);
+            let scale = landmark.scale * entry.placement_scale();
+            let mut e = commands.spawn((
+                WorldProp,
+                WorldAssetRoot(handle),
+                Transform::from_translation(pos)
+                    .with_scale(Vec3::splat(scale * 0.01))
+                    .with_rotation(Quat::from_rotation_y(
+                        rand01(&mut rng) * std::f32::consts::TAU,
+                    )),
+                PropRise {
+                    delay: stagger_delay(placed, total + recipe.landmarks.len(), settle),
+                    dur: RISE_SECS,
+                    target: scale,
+                    t: 0.0,
+                },
+            ));
+            // Hero landmarks stay visible through the fog (Tier::Hero range).
+            // Emissive is baked into the asset material; the glow ceiling in
+            // animate_world caps overall brightness (Comfort-gated).
+            let _ = &mut e; // keep the spawn expression uniform
+            placed += 1;
+        }
+    }
+
     if placed > 0 {
         info!(
-            "Placed {placed} props for {} (settle {settle:.2}s)",
+            "Placed {placed} props for {} (settle {settle:.2}s, density {density:.2})",
             crate::theme::MOODS[mood].world_name
         );
+    }
+}
+
+/// World position for a landmark anchor. Cardinal rotates around the rim by
+/// index so multiple Cardnals spread out; Rim sits on the far horizon.
+fn landmark_anchor(anchor: crate::recipe::Anchor, i: usize) -> Vec3 {
+    use crate::recipe::Anchor;
+    match anchor {
+        Anchor::Center => Vec3::new(0.0, -0.5, -6.0),
+        Anchor::Cardinal => {
+            let ang = i as f32 * std::f32::consts::FRAC_PI_2;
+            Vec3::new(ang.cos() * 16.0, -0.5, ang.sin() * 16.0 - 4.0)
+        }
+        Anchor::Rim => {
+            let ang = (i as f32 + 0.5) * std::f32::consts::FRAC_PI_2;
+            Vec3::new(ang.cos() * 40.0, -0.5, ang.sin() * 40.0)
+        }
     }
 }
 

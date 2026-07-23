@@ -5,13 +5,19 @@
 //! and asset-assembly pipeline described in `idea.md` comes later; for now the
 //! transport and beat are simulated (see [`playback`]).
 
+#[cfg(feature = "llm")]
+mod agent;
 mod analysis;
 mod audio;
+mod demucs;
 mod hud;
+#[cfg(feature = "llm")]
+mod llm;
 #[cfg(feature = "ml")]
 mod ml;
 mod overlays;
 mod playback;
+mod recipe;
 mod theme;
 mod world;
 mod world_assets;
@@ -208,6 +214,7 @@ fn main() {
     .init_resource::<Photo>()
     .init_resource::<Onboarding>()
     .init_resource::<WorldIntensity>()
+    .init_resource::<recipe::ActiveRecipe>()
     .init_resource::<Comfort>()
     .init_resource::<WorldClock>()
     .init_resource::<world::PaletteWash>()
@@ -256,6 +263,7 @@ fn main() {
             .chain(),
     )
     .add_systems(Update, overlays::overlay_scroll)
+    .add_systems(Update, world::spawn_particles)
     .add_systems(Update, (world::palette_wash, world::animate_world).chain())
     .add_systems(
         Update,
@@ -356,6 +364,26 @@ fn main() {
                 .chain()
                 .run_if(in_state(AppState::InWorld)),
         );
+    }
+
+    // M7 agent: create the (bridge, channels) pair up-front so the analysis
+    // worker (a std::thread) can reach the bridge via the global install while
+    // Bevy owns the executor (channels + name registry). Under `llm` only;
+    // absent otherwise. Done here (after the builder chain) because a cfg on a
+    // chained call breaks its receiver.
+    #[cfg(feature = "llm")]
+    {
+        let (agent_bridge, agent_channels) = agent::create_channels();
+        // Install the bridge globally so the worker thread (spawned in
+        // AnalysisStore::default, which runs before this point) can find it.
+        // The worker checks `agent_bridge()` per-track, so a late install is
+        // fine: tracks analyzed before install simply skip the agent tier.
+        agent::install_bridge(agent_bridge);
+        app.insert_resource(agent::AgentExecutor {
+            channels: agent_channels,
+            registry: agent::NameRegistry::default(),
+        });
+        app.add_systems(Update, agent::drain_agent_commands);
     }
 
     app.run();

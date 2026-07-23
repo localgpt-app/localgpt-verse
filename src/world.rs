@@ -34,6 +34,25 @@ pub struct Drifter {
     pub base: Vec3,
 }
 
+/// An ambient particle (M7 recipe `particles`). Drifts upward or downward per
+/// `kind`, recycled when it leaves the volume. Spawned/refreshed on recipe
+/// change by [`spawn_particles`]; animated by [`animate_world`].
+#[derive(Component)]
+pub struct Particle {
+    pub kind: crate::recipe::ParticleKind,
+    pub seed: f32,
+    /// Home position (kept for a future "settle back" reset; recycle currently
+    /// clamps Y in place).
+    #[allow(dead_code)]
+    pub base: Vec3,
+    /// Per-particle drift speed multiplier.
+    pub drift: f32,
+}
+
+/// Half-extent of the particle volume (x/z spread, max height).
+const PARTICLE_SPREAD: f32 = 30.0;
+const PARTICLE_MAX_Y: f32 = 18.0;
+
 /// Handles to the shared world materials so palette swaps are cheap.
 #[derive(Resource)]
 pub struct WorldMaterials {
@@ -258,29 +277,135 @@ pub fn palette_wash(
     }
 }
 
+/// Spawn/refresh the ambient particle field from the recipe (M7). Runs each
+/// frame but only rebuilds when the recipe's particle signature changes
+/// (kind and rounded rate), so it's cheap. No recipe or rate 0 means no
+/// particles (and any existing ones are despawned). Seeded deterministically
+/// from the recipe seed.
+pub fn spawn_particles(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    active_recipe: Res<crate::recipe::ActiveRecipe>,
+    theme: Res<Theme>,
+    existing: Query<Entity, With<Particle>>,
+    mut last: Local<Option<(crate::recipe::ParticleKind, u32)>>,
+) {
+    let signature = active_recipe.get().and_then(|r| {
+        (r.particles.rate > 0.0).then_some((r.particles.kind, (r.particles.rate * 10.0) as u32))
+    });
+
+    // Rebuild only on a signature change (kind, or rate to 1 decimal).
+    if *last == signature {
+        return;
+    }
+    *last = signature;
+
+    // Always clear first (covers rate→0 and kind swaps).
+    for e in &existing {
+        commands.entity(e).despawn();
+    }
+
+    let Some(recipe) = active_recipe.get() else {
+        return;
+    };
+    if recipe.particles.rate <= 0.0 {
+        return;
+    }
+
+    // Particle count scales with rate (capped for perf). rate 0..1 → 0..200.
+    let count = (recipe.particles.rate * 200.0).round() as usize;
+    let mood = theme.current();
+    let tint = match recipe.particles.kind {
+        crate::recipe::ParticleKind::Ember => mood.accent,
+        crate::recipe::ParticleKind::Spark => mood.accent,
+        crate::recipe::ParticleKind::Snow => mood.sky_top,
+        crate::recipe::ParticleKind::Spore => mood.ambient,
+        crate::recipe::ParticleKind::Dust => mood.fog,
+    };
+    let mesh = meshes.add(Sphere::new(0.06).mesh().ico(2).unwrap());
+    // One shared material for the whole field (cheap); per-kind tint only.
+    let material = materials.add(StandardMaterial {
+        base_color: tint.with_alpha(0.7),
+        emissive: scaled_linear(tint, 0.5),
+        unlit: true,
+        ..default()
+    });
+    let mut rng = recipe.seed;
+    for _ in 0..count {
+        let x = (crate::world_assets::splitmix(&mut rng) as f32 / u32::MAX as f32 - 0.5)
+            * 2.0
+            * PARTICLE_SPREAD;
+        let y = (crate::world_assets::splitmix(&mut rng) as f32 / u32::MAX as f32) * PARTICLE_MAX_Y;
+        let z = (crate::world_assets::splitmix(&mut rng) as f32 / u32::MAX as f32 - 0.5)
+            * 2.0
+            * PARTICLE_SPREAD;
+        commands.spawn((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_xyz(x, y, z),
+            Particle {
+                kind: recipe.particles.kind,
+                seed: crate::world_assets::splitmix(&mut rng) as f32 / u32::MAX as f32,
+                base: Vec3::new(x, y, z),
+                drift: recipe.particles.drift,
+            },
+        ));
+    }
+}
+
 /// Drift the shapes; pulse their glow with the beat; obey the world clock so a
 /// paused world slows to a near-freeze (time-dilation).
+#[allow(clippy::too_many_arguments)]
 pub fn animate_world(
     time: Res<Time>,
     clock: Res<WorldClock>,
     beat: Res<Beat>,
     comfort: Res<crate::Comfort>,
+    active_recipe: Res<crate::recipe::ActiveRecipe>,
     world_mats: Option<Res<WorldMaterials>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut drifters: Query<(&Drifter, &mut Transform)>,
+    mut particles: Query<(&Particle, &mut Transform)>,
 ) {
     let t = time.elapsed_secs();
     let dt = time.delta_secs() * clock.speed;
     // Comfort › Gentler world motion damps the sway (spec 1n).
     let gentle = if comfort.gentler_motion { 0.4 } else { 1.0 };
+    // M7: a recipe may scale drift speed within [0.25, 2.5] (already clamped).
+    // Absent recipe → 1.0 (today's behaviour).
+    let motion = active_recipe.get().map(|r| r.motion_speed).unwrap_or(1.0);
 
     for (d, mut tf) in &mut drifters {
         let p = t * clock.speed;
         tf.translation.y =
-            d.base.y + (p * 0.4 + d.seed * std::f32::consts::TAU).sin() * 0.6 * gentle;
+            d.base.y + (p * 0.4 * motion + d.seed * std::f32::consts::TAU).sin() * 0.6 * gentle;
         tf.translation.x =
-            d.base.x + (p * 0.23 + d.seed * std::f32::consts::PI).cos() * 0.4 * gentle;
-        tf.rotate_y(dt * (0.2 + d.seed.fract() * 0.4) * gentle);
+            d.base.x + (p * 0.23 * motion + d.seed * std::f32::consts::PI).cos() * 0.4 * gentle;
+        tf.rotate_y(dt * (0.2 + d.seed.fract() * 0.4) * gentle * motion);
+    }
+
+    // M7: drift the recipe's particle layer. Direction is kind-dependent
+    // (embers/sparks rise, snow falls, dust/spores hover), speed scaled by the
+    // recipe's drift and the global motion multiplier. Particles recycle to the
+    // bottom (rising kinds) or top (falling) when they leave the volume.
+    use crate::recipe::ParticleKind;
+    for (p, mut tf) in &mut particles {
+        let vertical = match p.kind {
+            ParticleKind::Ember | ParticleKind::Spark => 1.0, // rise
+            ParticleKind::Snow => -0.6,                       // fall
+            ParticleKind::Dust | ParticleKind::Spore => 0.15, // hover
+        };
+        let speed = vertical * p.drift * motion * gentle * 1.5;
+        tf.translation.y += dt * speed;
+        // Lateral wander for life.
+        tf.translation.x += (t * 0.5 + p.seed * std::f32::consts::TAU).sin() * dt * 0.3 * gentle;
+        // Recycle when out of bounds.
+        if tf.translation.y > PARTICLE_MAX_Y {
+            tf.translation.y = 0.0;
+        } else if tf.translation.y < 0.0 {
+            tf.translation.y = PARTICLE_MAX_Y;
+        }
     }
 
     // Beat-reactive emissive on the shared drifter material. (Split out of a
@@ -293,6 +418,12 @@ pub fn animate_world(
         } else {
             0.55 + beat.pulse * 0.9 * beat.energy
         };
+        // M7: scale the glow by the recipe's bloom ceiling (1.0 = today).
+        let glow = glow
+            * active_recipe
+                .get()
+                .map(|r| r.atmosphere.bloom_ceiling)
+                .unwrap_or(1.0);
         material.emissive = scaled_linear_from(material.emissive, glow);
     }
 }
