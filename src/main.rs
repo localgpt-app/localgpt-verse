@@ -224,6 +224,7 @@ fn main() {
     .init_resource::<Comfort>()
     .init_resource::<WorldClock>()
     .init_resource::<world::PaletteWash>()
+    .init_resource::<world::HeldRing>()
     .init_resource::<AudioActive>()
     .init_resource::<SeekRequest>()
     .init_resource::<Volume>()
@@ -276,6 +277,10 @@ fn main() {
     .add_systems(Update, save_settings_debounced)
     .add_systems(Update, world::spawn_particles)
     .add_systems(Update, (world::palette_wash, world::animate_world).chain())
+    .add_systems(
+        Update,
+        world::sync_held_ring.run_if(in_state(AppState::InWorld)),
+    )
     .add_systems(
         Update,
         (input_first_run, overlays::refresh_onboarding).run_if(in_state(AppState::FirstRun)),

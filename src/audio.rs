@@ -22,9 +22,9 @@ use kira::{AudioManager, AudioManagerSettings, DefaultBackend, Easing, Frame, Tw
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::tag::Accessor;
 
+use crate::AudioActive;
 use crate::playback::{Beat, Playback, Track};
 use crate::theme::Theme;
-use crate::{AudioActive, Paused};
 
 /// A tween with the given duration (start immediately, linear).
 fn tween_ms(ms: u64) -> Tween {
@@ -117,7 +117,6 @@ pub fn init_audio(player: ResMut<AudioPlayer>, tap: Res<AudioTap>) {
 /// Start/stop streams so the playing sound always matches `Playback.current`.
 pub fn sync_track_playback(
     player: Res<AudioPlayer>,
-    paused: Res<Paused>,
     mut playback: ResMut<Playback>,
     mut audio_active: ResMut<AudioActive>,
 ) {
@@ -161,7 +160,7 @@ pub fn sync_track_playback(
                         Ok(mut handle) => {
                             // A track can start while paused (pause → skip):
                             // hold it silently until resume.
-                            if paused.0 {
+                            if !playback.playing {
                                 handle.pause(tween_ms(0));
                             }
                             let t = &playback.queue[idx];
@@ -180,22 +179,30 @@ pub fn sync_track_playback(
 
 /// Pause/resume with the spec's time-dilation tweens (220ms in / 320ms out).
 ///
-/// Acts only on actual value flips (`Local` tracks the last state): re-issuing
-/// `pause()` restarts its fade tween, so a writer that sets `Paused` every
-/// frame would otherwise keep the sound in a never-finishing fade.
-pub fn sync_pause(player: Res<AudioPlayer>, paused: Res<Paused>, mut last: Local<Option<bool>>) {
-    if *last == Some(paused.0) {
+/// Follows the transport itself (`playback.playing`) rather than the pause
+/// *menu*, so the HUD's play/pause button freezes the sound in place without
+/// opening the overlay (Esc still does). Acts only on actual value flips
+/// (`Local` tracks the last state): re-issuing `pause()` restarts its fade
+/// tween, so a writer that flipped every frame would otherwise keep the sound
+/// in a never-finishing fade.
+pub fn sync_pause(
+    player: Res<AudioPlayer>,
+    playback: Res<Playback>,
+    mut last: Local<Option<bool>>,
+) {
+    let is_paused = !playback.playing;
+    if *last == Some(is_paused) {
         return;
     }
-    let was = last.replace(paused.0);
-    if was.is_none() && !paused.0 {
+    let was = last.replace(is_paused);
+    if was.is_none() && !is_paused {
         return; // startup default — nothing to do
     }
     let mut guard = player.0.lock().unwrap();
     let Some(inner) = guard.as_mut() else { return };
     // Both streams breathe together during a crossfade.
     for handle in inner.handle.iter_mut().chain(inner.fading_out.iter_mut()) {
-        if paused.0 {
+        if is_paused {
             handle.pause(tween_ms(220));
         } else {
             handle.resume(tween_ms(320));

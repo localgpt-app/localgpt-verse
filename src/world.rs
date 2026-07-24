@@ -13,7 +13,7 @@ use bevy::pbr::DistanceFog;
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 
-use crate::playback::Beat;
+use crate::playback::{Beat, Playback};
 use crate::theme::Theme;
 use crate::{CameraMode, WorldClock};
 
@@ -59,6 +59,15 @@ pub struct WorldMaterials {
     pub ground: Handle<StandardMaterial>,
     pub drifter: Handle<StandardMaterial>,
 }
+
+/// Eased 0..1 visibility for the pause "held ring" (spec 1e): eases in over
+/// ~220ms while the transport is frozen, out over ~320ms on resume.
+#[derive(Resource, Default)]
+pub struct HeldRing(pub f32);
+
+/// The quiet ring that appears while the transport is frozen (spec 1e).
+#[derive(Component)]
+pub struct HeldRingMesh;
 
 pub fn setup_world(
     mut commands: Commands,
@@ -129,6 +138,22 @@ pub fn setup_world(
         Mesh3d(meshes.add(Plane3d::default().mesh().size(240.0, 240.0))),
         MeshMaterial3d(ground_mat),
         Transform::from_xyz(0.0, -0.5, 0.0),
+    ));
+
+    // The pause "held ring" (spec 1e): an unlit emissive torus that eases in
+    // while the transport is frozen. `sync_held_ring` keeps it ahead of the
+    // camera and drives its alpha from the `HeldRing` resource.
+    commands.spawn((
+        HeldRingMesh,
+        Mesh3d(meshes.add(Torus::new(1.1, 1.125).mesh().minor_resolution(64))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: crate::theme::TEXT.with_alpha(0.0),
+            emissive: scaled_linear(crate::theme::TEXT, 0.7),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        })),
+        Transform::from_xyz(0.0, 2.0, 5.0),
     ));
 
     // A field of drifting shapes, placed on a deterministic golden-angle
@@ -492,6 +517,54 @@ pub fn camera_control(
     }
 }
 
+/// Drive the pause "held ring" (spec 1e): ease its visibility in (~220ms) while
+/// the transport is frozen and out (~320ms) on resume, and keep it a fixed
+/// distance ahead of the camera so it's always centred on screen.
+#[allow(clippy::type_complexity)]
+pub fn sync_held_ring(
+    time: Res<Time>,
+    playback: Res<Playback>,
+    mut ring_res: ResMut<HeldRing>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut qs: ParamSet<(
+        Query<&Transform, With<WorldCamera>>,
+        Query<(&mut Transform, &MeshMaterial3d<StandardMaterial>), With<HeldRingMesh>>,
+    )>,
+) {
+    let frozen = !playback.playing;
+    let target = frozen as u8 as f32;
+    // ~220ms in / ~320ms out.
+    let rate = if frozen { 4.5 } else { 3.1 };
+    ring_res.0 += (target - ring_res.0) * (time.delta_secs() * rate).min(1.0);
+    ring_res.0 = ring_res.0.clamp(0.0, 1.0);
+
+    // Read the camera first (scoped so the query borrow drops before p1),
+    // then move the ring ahead of it.
+    let cam_tf = {
+        let cam_q = qs.p0();
+        match cam_q.single() {
+            Ok(tf) => *tf,
+            Err(_) => return,
+        }
+    };
+    let mut ring_q = qs.p1();
+    let Ok((mut ring_tf, mat)) = ring_q.single_mut() else {
+        return;
+    };
+    let cam_fwd = cam_tf.forward();
+    ring_tf.translation = cam_tf.translation + cam_fwd * 7.0;
+    // A Bevy `Torus` lies in its local XZ plane (hole axis +Y). Point the
+    // entity's −Z at the camera, then roll the torus 90° about X to stand it
+    // upright so it presents as a circle (not a flat line).
+    let stand_up = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+    ring_tf.rotation = cam_tf.rotation * stand_up;
+
+    let Some(mut material) = materials.get_mut(&mat.0) else {
+        return;
+    };
+    material.base_color = crate::theme::TEXT.with_alpha(ring_res.0 * 0.45);
+}
+
 // --- colour helpers -------------------------------------------------------
 
 /// `color * intensity` as a linear-RGB emissive value.
@@ -509,4 +582,59 @@ fn scaled_linear_from(current: LinearRgba, intensity: f32) -> LinearRgba {
         current.green / max * intensity,
         current.blue / max * intensity,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    /// The exact easing step used by `sync_held_ring`.
+    fn step(v: f32, frozen: bool, dt: f32) -> f32 {
+        let target = frozen as u8 as f32;
+        let rate = if frozen { 4.5 } else { 3.1 };
+        (v + (target - v) * (dt * rate).min(1.0)).clamp(0.0, 1.0)
+    }
+
+    #[test]
+    fn held_ring_eases_up_while_frozen() {
+        let mut v = 0.0;
+        for _ in 0..60 {
+            v = step(v, true, 1.0 / 60.0);
+        }
+        assert!(v > 0.99, "1s of freeze brings the ring to ~full (got {v})");
+    }
+
+    #[test]
+    fn held_ring_fades_faster_in_than_out() {
+        // 220ms in vs 320ms out: after 0.3s the fade-in is well past half
+        // (e^(−1.35) ≈ 0.26 → 0.74 up), while the fade-out is only about
+        // half-done (e^(−1.24) ≈ 0.29 → 0.29 down from full).
+        let mut up = 0.0;
+        for _ in 0..18 {
+            up = step(up, true, 1.0 / 60.0); // 0.3s
+        }
+        let mut down = 1.0;
+        for _ in 0..24 {
+            down = step(down, false, 1.0 / 60.0); // 0.4s
+        }
+        assert!(up > 0.5, "fade-in mostly done by 0.3s (got {up})");
+        assert!(down < 0.5, "fade-out still partial at 0.4s (got {down})");
+        // …and at equal elapsed time the fade-in is strictly faster.
+        let a = step(0.0, true, 0.2); // 0.2s in
+        let b = step(1.0, false, 0.2); // 0.2s out (remaining)
+        assert!(a > b, "in ({a}) should outpace out (remaining {b})");
+    }
+
+    #[test]
+    fn held_ring_stays_clamped() {
+        let mut v = 1.0;
+        for _ in 0..600 {
+            v = step(v, true, 1.0 / 60.0);
+        }
+        assert!((0.0..=1.0).contains(&v));
+        let mut v = 0.0;
+        for _ in 0..600 {
+            v = step(v, false, 1.0 / 60.0);
+        }
+        assert!((0.0..=1.0).contains(&v));
+        assert_eq!(v, 0.0, "fully resumed settles to 0");
+    }
 }
