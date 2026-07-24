@@ -123,9 +123,22 @@ pub fn overlay_actions(
     mut stack: ResMut<OverlayStack>,
     mut paused: ResMut<Paused>,
     mut playback: ResMut<Playback>,
+    mut import: ResMut<crate::audio::ImportState>,
 ) {
     for UiAction(action) in actions.read() {
         match action {
+            ButtonAction::Start => {
+                // The in-world "Import folder" button (library sidebar). Same
+                // native picker path as onboarding (blocks main thread while
+                // the modal is open — required on macOS anyway). Replacing the
+                // queue is handled by poll_import on the first batch.
+                if let Some(folder) = rfd::FileDialog::new()
+                    .set_title("Choose your music folder")
+                    .pick_folder()
+                {
+                    crate::audio::start_import(folder, &mut import);
+                }
+            }
             ButtonAction::Resume => {
                 paused.0 = false;
                 playback.playing = true;
