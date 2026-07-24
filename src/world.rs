@@ -435,6 +435,7 @@ pub fn camera_control(
     mode: Res<CameraMode>,
     keys: Res<ButtonInput<KeyCode>>,
     motion: Res<AccumulatedMouseMotion>,
+    window_q: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
     mut cam_q: Query<(&mut Transform, &mut WorldCamera)>,
 ) {
     let Ok((mut tf, mut cam)) = cam_q.single_mut() else {
@@ -451,10 +452,20 @@ pub fn camera_control(
             tf.look_at(target, Vec3::Y);
         }
         CameraMode::Explore => {
-            // Mouse-look (no cursor grab — subtle, always-on).
-            let d = motion.delta;
-            cam.yaw -= d.x * 0.0022;
-            cam.pitch = (cam.pitch - d.y * 0.0022).clamp(-1.2, 0.6);
+            // Mouse-look (no cursor grab — subtle, always-on) — but only while
+            // the cursor is over the window. Without this gate the OS keeps
+            // sending motion deltas after the mouse leaves, so the world would
+            // spin from off-window movement. `cursor_position()` is None when
+            // the cursor is outside the window bounds (and when unfocused).
+            let cursor_over_window = window_q
+                .single()
+                .map(|w| w.cursor_position().is_some())
+                .unwrap_or(false);
+            if cursor_over_window {
+                let d = motion.delta;
+                cam.yaw -= d.x * 0.0022;
+                cam.pitch = (cam.pitch - d.y * 0.0022).clamp(-1.2, 0.6);
+            }
             let rot = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0);
             tf.rotation = rot;
 
