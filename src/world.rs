@@ -365,8 +365,8 @@ pub fn animate_world(
     active_recipe: Res<crate::recipe::ActiveRecipe>,
     world_mats: Option<Res<WorldMaterials>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut drifters: Query<(&Drifter, &mut Transform)>,
-    mut particles: Query<(&Particle, &mut Transform)>,
+    mut drifters: Query<(&Drifter, &mut Transform), Without<Particle>>,
+    mut particles: Query<(&Particle, &mut Transform), Without<Drifter>>,
 ) {
     let t = time.elapsed_secs();
     let dt = time.delta_secs() * clock.speed;
