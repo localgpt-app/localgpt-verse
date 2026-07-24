@@ -100,6 +100,7 @@ pub fn onboarding_actions(
                     .set_title("Choose your music folder")
                     .pick_folder()
                 {
+                    crate::settings::record_folder(&folder);
                     crate::audio::start_import(folder, &mut import);
                     next_state.set(AppState::InWorld);
                 }
@@ -136,6 +137,7 @@ pub fn overlay_actions(
                     .set_title("Choose your music folder")
                     .pick_folder()
                 {
+                    crate::settings::record_folder(&folder);
                     crate::audio::start_import(folder, &mut import);
                 }
             }

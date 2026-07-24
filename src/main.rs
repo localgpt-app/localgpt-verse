@@ -7,6 +7,7 @@
 
 #[cfg(feature = "llm")]
 mod agent;
+mod agent_types;
 mod analysis;
 mod audio;
 mod demucs;
@@ -18,6 +19,7 @@ mod ml;
 mod overlays;
 mod playback;
 mod recipe;
+mod settings;
 mod theme;
 mod world;
 mod world_assets;
@@ -44,7 +46,9 @@ pub enum AppState {
 }
 
 /// Camera feel. Also stored inside each HUD mode tab.
-#[derive(Resource, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(
+    Resource, Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize,
+)]
 pub enum CameraMode {
     /// First-person WASD + mouse-look.
     #[default]
@@ -142,7 +146,9 @@ impl Default for WorldIntensity {
 }
 
 /// Comfort settings — the reduce-flashing gate the spec insists on.
-#[derive(Resource, Default)]
+#[derive(
+    Resource, Default, Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
 pub struct Comfort {
     pub reduce_flashing: bool,
     pub gentler_motion: bool,
@@ -235,6 +241,9 @@ fn main() {
             world_assets::load_asset_manifest,
             audio::init_audio,
             auto_import,
+            // Load persisted settings (Comfort/Volume/etc.) and re-import the
+            // last folder, overriding the init_resource defaults.
+            apply_loaded_settings,
         ),
     )
     .add_systems(OnEnter(AppState::FirstRun), overlays::spawn_first_run)
@@ -263,6 +272,8 @@ fn main() {
             .chain(),
     )
     .add_systems(Update, overlays::overlay_scroll)
+    // Persist settings changes (debounced to 1 write/sec).
+    .add_systems(Update, save_settings_debounced)
     .add_systems(Update, world::spawn_particles)
     .add_systems(Update, (world::palette_wash, world::animate_world).chain())
     .add_systems(
@@ -321,7 +332,9 @@ fn main() {
                 hud::update_mode_tabs,
                 hud::update_reticle,
                 hud::update_section_notches,
+                hud::update_transport,
                 hud::seek_strip_scrub,
+                hud::transport_clicks,
                 hud::mode_tab_clicks,
                 hud::chip_clicks,
             ),
@@ -384,6 +397,9 @@ fn main() {
             registry: agent::NameRegistry::default(),
         });
         app.add_systems(Update, agent::drain_agent_commands);
+        // Replay a cached SceneBuild when the current track has one (no LLM
+        // re-run). Runs after drain so live-issued and replayed commands agree.
+        app.add_systems(Update, agent::replay_cached_build);
     }
 
     app.run();
@@ -538,6 +554,97 @@ fn auto_import(mut import: ResMut<audio::ImportState>) {
     }
 }
 
+/// Load persisted settings at startup and override the default resources
+/// (Comfort/Volume/WorldIntensity/CameraMode/Onboarding) with the saved
+/// values. Also stores the loaded [`settings::AppSettings`] as a resource so
+/// the debounced saver can diff against it, and re-imports the last folder
+/// (unless `REVERIE_IMPORT` is set, which takes precedence).
+#[allow(clippy::too_many_arguments)]
+fn apply_loaded_settings(
+    mut comfort: ResMut<Comfort>,
+    mut volume: ResMut<Volume>,
+    mut intensity: ResMut<WorldIntensity>,
+    mut camera: ResMut<CameraMode>,
+    mut onboarding: ResMut<Onboarding>,
+    mut import: ResMut<audio::ImportState>,
+    mut commands: Commands,
+) {
+    let loaded = settings::load().unwrap_or_default();
+    *comfort = loaded.comfort;
+    volume.0 = loaded.volume;
+    intensity.0 = loaded.world_intensity;
+    *camera = loaded.camera_mode;
+    // A returning user who finished onboarding skips it; a fresh user (no file)
+    // starts at step 0.
+    if loaded.onboarding_done {
+        onboarding.step = u8::MAX;
+    }
+    // Re-import the most recently opened folder (env override wins).
+    if std::env::var("REVERIE_IMPORT").is_err()
+        && let Some(folder) = loaded.last_folders.last()
+        && folder.exists()
+    {
+        audio::start_import(folder.clone(), &mut import);
+    }
+    commands.insert_resource(SettingsSnapshot(loaded));
+}
+
+/// The last-saved settings, held as a resource so [`save_settings_debounced`]
+/// can diff the live resource values against it and write only on change.
+#[derive(Resource)]
+struct SettingsSnapshot(settings::AppSettings);
+
+/// Debounced settings writer: compares the current Comfort/Volume/etc. against
+/// the snapshot, and if any value changed, writes once per second at most.
+/// Cheap when idle (a few field compares; no disk I/O).
+#[allow(clippy::too_many_arguments)]
+fn save_settings_debounced(
+    comfort: Res<Comfort>,
+    volume: Res<Volume>,
+    intensity: Res<WorldIntensity>,
+    camera: Res<CameraMode>,
+    onboarding: Res<Onboarding>,
+    time: Res<Time>,
+    mut snapshot: ResMut<SettingsSnapshot>,
+    mut due_at: Local<Option<f64>>,
+) {
+    let now = time.elapsed_secs_f64();
+    // Pending folder imports (queued by the UI handlers) also count as a change
+    // and need to be folded in when the write fires.
+    let pending = settings::drain_pending_folders();
+    // Coalesce bursts (slider drag, rapid toggles): schedule a write 1s after
+    // the first change, keep pushing it out while changes continue.
+    let changed = snapshot.0.comfort != *comfort
+        || snapshot.0.volume != volume.0
+        || snapshot.0.world_intensity != intensity.0
+        || snapshot.0.camera_mode != *camera
+        || snapshot.0.onboarding_done != (onboarding.step == u8::MAX)
+        || !pending.is_empty();
+    if changed && due_at.is_none() {
+        *due_at = Some(now + 1.0);
+    }
+    let Some(due) = *due_at else { return };
+    if now < due {
+        return;
+    }
+    *due_at = None;
+    // Snapshot current values, fold in any newly-imported folders, and persist.
+    snapshot.0.comfort = *comfort;
+    snapshot.0.volume = volume.0;
+    snapshot.0.world_intensity = intensity.0;
+    snapshot.0.camera_mode = *camera;
+    snapshot.0.onboarding_done = onboarding.step == u8::MAX;
+    for folder in &pending {
+        snapshot.0.last_folders.retain(|p| p != folder);
+        snapshot.0.last_folders.push(folder.clone());
+        // Bound the history (keeps the file tidy across many imports).
+        if snapshot.0.last_folders.len() > 8 {
+            snapshot.0.last_folders.remove(0);
+        }
+    }
+    settings::save(&snapshot.0);
+}
+
 /// Photo mode: force the HUD hidden, then capture a clean screenshot to
 /// `reverie-photos/`. Runs for a few frames so the chrome fully fades first.
 fn photo_capture(
@@ -596,10 +703,15 @@ fn photo_path() -> String {
     format!("{dir}/reverie-{ms}.png")
 }
 
-/// Ease the world timescale toward its target (time-dilation on pause).
-fn ease_world_clock(time: Res<Time>, paused: Res<Paused>, mut clock: ResMut<WorldClock>) {
-    let target = if paused.0 { 0.05 } else { 1.0 };
-    let rate = if paused.0 { 6.0 } else { 4.0 };
+/// Ease the world timescale toward its target (time-dilation while frozen).
+///
+/// Keyed on the transport itself (`playback.playing`) so the HUD play/pause
+/// button — which pauses without opening the menu — still dilates time. The
+/// menu-pause (Esc) also clears `playing`, so both routes freeze the world.
+fn ease_world_clock(time: Res<Time>, playback: Res<Playback>, mut clock: ResMut<WorldClock>) {
+    let frozen = !playback.playing;
+    let target = if frozen { 0.05 } else { 1.0 };
+    let rate = if frozen { 6.0 } else { 4.0 };
     clock.speed += (target - clock.speed) * (time.delta_secs() * rate).min(1.0);
 }
 
@@ -677,8 +789,8 @@ fn input_in_world(
         }
     }
     if keys.just_pressed(KeyCode::MediaPlayPause) {
-        paused.0 = !paused.0;
-        playback.playing = !paused.0;
+        // Transport freeze in place — no menu (Esc opens the pause menu).
+        playback.playing = !playback.playing;
     }
     if keys.just_pressed(KeyCode::KeyF) {
         *mode = match *mode {

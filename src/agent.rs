@@ -41,8 +41,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bevy::log::{info, warn};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+// Re-export the always-compiled data types so callers can reach them via
+// `crate::agent::SceneBuild` etc., while the types themselves live in the
+// ungated `agent_types` module (so `TrackAnalysis` can carry them without the
+// `llm` feature).
+pub use crate::agent_types::{
+    AgentCommand, AgentResponse, EnvironmentCmd, ModifyEntityCmd, PrimitiveShape, SceneBuild,
+    SetLightCmd, SpawnPrimitiveCmd,
+};
 
 // The bridge's async channels are tokio mpsc (matches gen's pattern). The
 // command/response types are plain structs so the Bevy side (sync) can move
@@ -53,171 +61,9 @@ use crate::analysis::TrackAnalysis;
 use crate::theme::MOODS;
 
 // ---------------------------------------------------------------------------
-// Scene build — the durable result of an agent session
+// (SceneBuild + AgentCommand + cmd structs live in crate::agent_types, always
+// compiled, re-exported above. The feature-gated runtime begins below.)
 // ---------------------------------------------------------------------------
-
-/// A fully agent-authored scene: the commands the LLM issued, replayable into
-/// any Bevy world. Stored in the sidecar (like a recipe) so a track's world is
-/// rebuilt identically on replay without re-running the LLM.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SceneBuild {
-    /// The ordered commands the agent issued (spawn/modify/...). The Bevy
-    /// [`SceneBuilder`] resource replays these to reconstruct the world.
-    pub commands: Vec<AgentCommand>,
-}
-
-impl SceneBuild {
-    pub fn is_empty(&self) -> bool {
-        self.commands.is_empty()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Command / Response protocol (agent ↔ Bevy)
-// ---------------------------------------------------------------------------
-
-/// A single tool-call the agent wants executed against the Bevy world.
-/// The agent emits these; Bevy executes them and returns an [`AgentResponse`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case")]
-pub enum AgentCommand {
-    SpawnPrimitive(SpawnPrimitiveCmd),
-    ModifyEntity(ModifyEntityCmd),
-    DeleteEntity { name: String },
-    SetLight(SetLightCmd),
-    SetEnvironment(EnvironmentCmd),
-    SceneInfo,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpawnPrimitiveCmd {
-    pub name: String,
-    pub shape: PrimitiveShape,
-    #[serde(default)]
-    pub dimensions: HashMap<String, f32>,
-    #[serde(default = "zero3")]
-    pub position: [f32; 3],
-    #[serde(default = "zero3")]
-    pub rotation_degrees: [f32; 3],
-    #[serde(default = "one3")]
-    pub scale: [f32; 3],
-    #[serde(default = "default_color")]
-    pub color: [f32; 4],
-    #[serde(default)]
-    pub metallic: f32,
-    #[serde(default = "default_roughness")]
-    pub roughness: f32,
-    #[serde(default = "zero4")]
-    pub emissive: [f32; 4],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub enum PrimitiveShape {
-    Cuboid,
-    Sphere,
-    Cylinder,
-    Cone,
-    Torus,
-    Plane,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModifyEntityCmd {
-    pub name: String,
-    pub position: Option<[f32; 3]>,
-    pub rotation_degrees: Option<[f32; 3]>,
-    pub scale: Option<[f32; 3]>,
-    pub color: Option<[f32; 4]>,
-    pub metallic: Option<f32>,
-    pub roughness: Option<f32>,
-    pub emissive: Option<[f32; 4]>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SetLightCmd {
-    pub name: String,
-    #[serde(default = "default_white")]
-    pub color: [f32; 4],
-    #[serde(default = "default_intensity")]
-    pub intensity: f32,
-    pub position: Option<[f32; 3]>,
-    /// Direction for a directional light (normalized). None → point light.
-    pub direction: Option<[f32; 3]>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EnvironmentCmd {
-    #[serde(default = "default_bg")]
-    pub background_color: [f32; 4],
-    #[serde(default = "default_ambient")]
-    pub ambient_light: [f32; 4],
-}
-
-/// Bevy's reply to one command. Serialized to a short string for the LLM.
-#[derive(Debug, Clone)]
-pub enum AgentResponse {
-    Spawned {
-        name: String,
-    },
-    Modified {
-        name: String,
-    },
-    Deleted {
-        name: String,
-    },
-    LightSet {
-        name: String,
-    },
-    EnvironmentSet,
-    /// A compact textual summary of the scene (entity names + transforms),
-    /// so the agent can reason about what it has built and iterate.
-    SceneInfo(String),
-    Error(String),
-}
-
-impl AgentResponse {
-    /// The human/LLM-readable result string.
-    pub fn to_message(&self) -> String {
-        match self {
-            Self::Spawned { name } => format!("spawned '{name}'"),
-            Self::Modified { name } => format!("modified '{name}'"),
-            Self::Deleted { name } => format!("deleted '{name}'"),
-            Self::LightSet { name } => format!("light '{name}' set"),
-            Self::EnvironmentSet => "environment set".into(),
-            Self::SceneInfo(s) => s.clone(),
-            Self::Error(e) => format!("error: {e}"),
-        }
-    }
-}
-
-fn zero3() -> [f32; 3] {
-    [0.0, 0.0, 0.0]
-}
-fn one3() -> [f32; 3] {
-    [1.0, 1.0, 1.0]
-}
-fn zero4() -> [f32; 4] {
-    [0.0, 0.0, 0.0, 0.0]
-}
-fn default_color() -> [f32; 4] {
-    [0.8, 0.8, 0.8, 1.0]
-}
-fn default_white() -> [f32; 4] {
-    [1.0, 1.0, 1.0, 1.0]
-}
-fn default_bg() -> [f32; 4] {
-    [0.043, 0.047, 0.067, 1.0]
-}
-fn default_ambient() -> [f32; 4] {
-    [0.3, 0.3, 0.4, 1.0]
-}
-fn default_roughness() -> f32 {
-    0.5
-}
-fn default_intensity() -> f32 {
-    1000.0
-}
 
 // ---------------------------------------------------------------------------
 // Bridge — async agent ↔ sync Bevy
@@ -483,7 +329,9 @@ fn parse_opt_arr4(v: &Value) -> Option<[f32; 4]> {
 // Bevy-side execution — name registry + frame drain
 // ---------------------------------------------------------------------------
 
-use bevy::prelude::{Assets, Commands, Component, Entity, Mesh, Query, ResMut, StandardMaterial};
+use bevy::prelude::{
+    Assets, Commands, Component, Entity, Local, Mesh, Query, Res, ResMut, StandardMaterial,
+};
 
 /// Marker for every agent-spawned entity, carrying its stable name.
 #[derive(Component)]
@@ -674,6 +522,40 @@ impl AgentExecutor {
             }
         }
     }
+
+    /// Despawn every agent-spawned entity and clear the name registry. Used
+    /// before replaying a cached [`SceneBuild`] so the scene is rebuilt clean
+    /// (spawn rejects duplicate names, so a stale scene would block replay).
+    pub fn clear_scene(&mut self, commands: &mut Commands, agent_entities: &Query<&AgentEntity>) {
+        for &e in self.registry.map.values() {
+            if agent_entities.get(e).is_ok() {
+                commands.entity(e).despawn();
+            }
+        }
+        self.registry.map.clear();
+    }
+
+    /// Replay a cached [`SceneBuild`] — iterate its commands through `execute`
+    /// without the LLM, bridge, or async runtime. Deterministic: the same build
+    /// → the same world. Call [`clear_scene`] first. Returns the count applied.
+    pub fn replay(
+        &mut self,
+        build: &SceneBuild,
+        commands: &mut Commands,
+        meshes: &mut ResMut<Assets<Mesh>>,
+        materials: &mut ResMut<Assets<StandardMaterial>>,
+    ) -> usize {
+        let mut n = 0;
+        for cmd in &build.commands {
+            // SceneInfo has no effect on replay (it only reports state).
+            if matches!(cmd, AgentCommand::SceneInfo) {
+                continue;
+            }
+            self.execute(cmd.clone(), commands, meshes, materials);
+            n += 1;
+        }
+        n
+    }
 }
 
 /// Build the Bevy mesh for a primitive from its shape + dimensions.
@@ -730,6 +612,44 @@ pub fn drain_agent_commands(
     agent_entities: Query<&AgentEntity>,
 ) {
     executor.drain(&mut commands, &mut meshes, &mut materials, &agent_entities);
+}
+
+/// Replay a cached `SceneBuild` when the current track changes and has a build
+/// stored in its analysis sidecar (PLAN.md M7 — no LLM re-run). Clears the
+/// agent scene first, then iterates the cached commands. No-op when the current
+/// track has no cached build or hasn't changed since the last replay.
+#[allow(clippy::too_many_arguments)]
+pub fn replay_cached_build(
+    mut executor: ResMut<AgentExecutor>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    analysis: Res<crate::analysis::AnalysisStore>,
+    playback: Res<crate::playback::Playback>,
+    agent_entities: Query<&AgentEntity>,
+    mut last: Local<Option<Option<String>>>,
+) {
+    let current_id = playback
+        .queue
+        .get(playback.current % playback.queue.len().max(1))
+        .and_then(|t| t.id.clone());
+    // Re-replay only when the current track id changes.
+    if *last == Some(current_id.clone()) {
+        return;
+    }
+    *last = Some(current_id.clone());
+
+    let Some(id) = current_id.as_deref() else {
+        return;
+    };
+    let Some(build) = analysis.get(id).and_then(|a| a.build.as_ref()) else {
+        // No cached build for this track — nothing to replay. Any previously
+        // replayed entities stay until the next track with a build clears them.
+        return;
+    };
+    executor.clear_scene(&mut commands, &agent_entities);
+    let n = executor.replay(build, &mut commands, &mut meshes, &mut materials);
+    info!("Replayed {n} cached agent commands for track {id}");
 }
 
 // ---------------------------------------------------------------------------
@@ -850,40 +770,6 @@ reply with a short description instead of calling more tools.",
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn scene_build_roundtrip() {
-        let b = SceneBuild {
-            commands: vec![AgentCommand::SpawnPrimitive(SpawnPrimitiveCmd {
-                name: "tower".into(),
-                shape: PrimitiveShape::Cuboid,
-                dimensions: HashMap::from([
-                    ("x".into(), 2.0),
-                    ("y".into(), 8.0),
-                    ("z".into(), 2.0),
-                ]),
-                position: [0.0, 4.0, 0.0],
-                rotation_degrees: [0.0, 0.0, 0.0],
-                scale: [1.0, 1.0, 1.0],
-                color: [0.2, 0.3, 0.8, 1.0],
-                metallic: 0.5,
-                roughness: 0.4,
-                emissive: [0.0, 0.0, 0.0, 0.0],
-            })],
-        };
-        let json = serde_json::to_string(&b).unwrap();
-        let back: SceneBuild = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.commands.len(), 1);
-        assert!(!back.is_empty());
-    }
-
-    #[test]
-    fn empty_scene_build_serializes_compactly() {
-        let b = SceneBuild::default();
-        assert!(b.is_empty());
-        let json = serde_json::to_string(&b).unwrap();
-        assert!(json.contains("commands"));
-    }
 
     #[test]
     fn tool_schemas_are_six_complete_functions() {

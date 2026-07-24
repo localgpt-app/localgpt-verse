@@ -92,6 +92,15 @@ pub struct TrackAnalysis {
     /// or [`crate::recipe::WorldRecipe::is_empty`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recipe: Option<crate::recipe::WorldRecipe>,
+
+    /// Agent-authored scene *build* — the ordered tool-calls Bonsai issued
+    /// (PLAN.md M7, `llm` feature, agent path). Cached so the world is rebuilt
+    /// deterministically on replay (no LLM re-run) and inspectable for debug.
+    /// `None` when the agent feature/model is absent or the session was empty.
+    /// Same serde-default contract as `recipe`: old sidecars without this field
+    /// load as `None` (no `SIDECAR_VERSION` bump needed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<crate::agent_types::SceneBuild>,
 }
 
 pub(crate) fn cache_dir() -> Option<PathBuf> {
@@ -534,6 +543,7 @@ fn analyze(path: &Path) -> Option<TrackAnalysis> {
         embedding: None,
         stems: None,
         recipe: None,
+        build: None,
     })
 }
 
@@ -647,27 +657,37 @@ impl Default for AnalysisStore {
                 // recipe. Bonsai calls tools (spawn_primitive, set_light, ...)
                 // to construct the world entity-by-entity, issuing commands
                 // through the globally-installed bridge that the Bevy executor
-                // drains each frame. Skipped when the bridge isn't installed
-                // (feature off / not yet ready) or the model is absent.
-                //
-                // This runs *in addition to* the recipe tier: the recipe
-                // modulates the mood-driven base world, while the agent tier
-                // can layer authored primitives on top. The SceneBuild result
-                // isn't persisted to the sidecar (the commands are replayed
-                // live by the executor, so it's session-scoped).
+                // drains each frame. Skipped when:
+                //   - the bridge isn't installed (feature off / not ready)
+                //   - the model is absent
+                //   - a build is already cached (build.is_none() gate) — replay
+                //     handles it instead, no LLM re-run.
+                // The resulting SceneBuild is persisted to the sidecar so the
+                // world is rebuilt deterministically on replay and the command
+                // stream is inspectable for debugging.
                 #[cfg(feature = "llm")]
-                if let Some(bridge) = crate::agent::agent_bridge()
+                let analysis = if analysis.build.is_none()
+                    && let Some(bridge) = crate::agent::agent_bridge()
                     && let Some(model) = recipe_model.as_mut()
                 {
                     let m = model.model_mut();
-                    if let Some(build) = crate::agent::run_session(m, bridge, &analysis) {
-                        info!(
-                            "Agent built {} primitives for {}",
-                            build.commands.len(),
-                            path.display()
-                        );
+                    match crate::agent::run_session(m, bridge, &analysis) {
+                        Some(build) => {
+                            info!(
+                                "Agent built {} primitives for {}",
+                                build.commands.len(),
+                                path.display()
+                            );
+                            let mut a = analysis;
+                            a.build = Some(build);
+                            save_sidecar(&id, &a);
+                            a
+                        }
+                        None => analysis,
                     }
-                }
+                } else {
+                    analysis
+                };
                 if res_tx.send((id, analysis)).is_err() {
                     return;
                 }
@@ -683,6 +703,13 @@ impl Default for AnalysisStore {
 }
 
 impl AnalysisStore {
+    /// The full analysis for a track id, when it's been computed. Used by the
+    /// agent replay path to read a cached `SceneBuild` without re-running the LLM.
+    #[allow(dead_code)]
+    pub fn get(&self, id: &str) -> Option<&TrackAnalysis> {
+        self.map.get(id)
+    }
+
     /// First-beat offset for a track, when analyzed and a grid was found.
     /// Used to land the materialize sequence on the first downbeat.
     pub fn beat_offset_for(&self, id: &str) -> Option<f32> {
