@@ -14,6 +14,11 @@ use super::widgets::*;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ButtonAction {
     Start,
+    /// In-world "Import folder" button (library sidebar). Distinct from
+    /// `Start` so only `overlay_actions` opens the picker — otherwise the
+    /// broadcast `UiAction` reaches both `onboarding_actions` and
+    /// `overlay_actions` and the native dialog opens twice.
+    ImportFolder,
     Skip,
     StartGentle,
     FullIntensity,
@@ -128,7 +133,7 @@ pub fn overlay_actions(
 ) {
     for UiAction(action) in actions.read() {
         match action {
-            ButtonAction::Start => {
+            ButtonAction::ImportFolder => {
                 // The in-world "Import folder" button (library sidebar). Same
                 // native picker path as onboarding (blocks main thread while
                 // the modal is open — required on macOS anyway). Replacing the

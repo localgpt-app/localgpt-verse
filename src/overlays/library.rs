@@ -128,7 +128,7 @@ fn sidebar(
             );
         });
         spacer(side, 6.0);
-        nav_row(side, fonts, "Import folder", ButtonAction::Start);
+        nav_row(side, fonts, "Import folder", ButtonAction::ImportFolder);
         nav_row(side, fonts, "Settings", ButtonAction::OpenSettings);
         spacer(side, 16.0);
 
