@@ -232,6 +232,7 @@ fn main() {
     .init_resource::<audio::AudioTap>()
     .init_resource::<audio::ImportState>()
     .init_resource::<analysis::AnalysisStore>()
+    .init_resource::<overlays::FolderPickRx>()
     .init_resource::<world_assets::WorldAssets>()
     .init_resource::<world_assets::WorldLayout>()
     // Setup.
@@ -287,8 +288,10 @@ fn main() {
     )
     // Audio: the import poll runs everywhere (the scan can start during
     // onboarding); the player syncs only in-world ("audio starts at 0s" on
-    // materialize). Chained — each stage feeds the next within a frame.
-    .add_systems(Update, audio::poll_import)
+    // materialize). Chained — each stage feeds the next within a frame. The
+    // folder pick is drained first so a freshly chosen path kicks off the
+    // scan before `poll_import` runs in the same frame.
+    .add_systems(Update, (overlays::poll_folder_pick, audio::poll_import).chain())
     .add_systems(
         Update,
         (

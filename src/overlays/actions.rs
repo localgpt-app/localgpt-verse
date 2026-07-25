@@ -1,8 +1,11 @@
 //! Button actions: the dispatcher broadcasts presses as [`UiAction`]
 //! messages; focused handlers consume them (ARCHITECTURE R3).
 
+use std::sync::{mpsc::Receiver, Mutex};
+
 use bevy::app::AppExit;
 use bevy::prelude::*;
+use bevy::tasks::AsyncComputeTaskPool;
 
 use crate::playback::Playback;
 use crate::theme::{self, Theme};
@@ -67,6 +70,76 @@ pub struct UiButton {
 #[derive(Message)]
 pub struct UiAction(pub ButtonAction);
 
+// --- native folder picker -----------------------------------------------------
+//
+// The synchronous `rfd::FileDialog::pick_folder()` cannot be called from a
+// Bevy Update system on macOS: Bevy runs Update inside winit's main-thread
+// run loop, and `NSOpenPanel` needs that same loop pumped to appear — so the
+// panel blocks the thread and never shows (the whole app freezes).
+//
+// `AsyncFileDialog` does NOT use a background thread for the panel itself:
+// it dispatches the native panel onto the main thread (pumped each frame by
+// winit) and resolves on a worker. We kick it off with `pick_folder()`
+// (which returns a `Future` for the path) — awaiting that future on the
+// task pool is what unblocks the main thread. The resolved path is sent over
+// a channel; `poll_folder_pick` applies it from a normal system.
+
+/// A pending folder-picker result, if any. Only one pick is in flight at a
+/// time (`launch_folder_pick` replaces any existing receiver).
+#[derive(Resource, Default)]
+pub struct FolderPickRx {
+    /// `Receiver` is `Send` but not `Sync`; wrapping it in a `Mutex` (like
+    /// `audio::ImportState`) lets the resource satisfy `Send + Sync`.
+    rx: Option<Mutex<Receiver<std::path::PathBuf>>>,
+    /// Set by onboarding when it launches a pick; when that pick resolves we
+    /// transition to `InWorld`. (The in-world "Import folder" button leaves
+    /// this false — it's already in-world.)
+    pub advance_on_resolve: bool,
+}
+
+/// Kick off the native folder picker off the main thread. `advance_state`,
+/// when true, transitions to `AppState::InWorld` once the pick resolves (the
+/// onboarding "Choose your music folder…" button wants this; the in-world
+/// library "Import folder" button does not — it's already in-world).
+pub fn launch_folder_pick(rx: &mut FolderPickRx) {
+    let (tx, channel_rx) = std::sync::mpsc::channel();
+    rx.rx = Some(Mutex::new(channel_rx));
+    let task = async move {
+        let folder = rfd::AsyncFileDialog::new()
+            .set_title("Choose your music folder")
+            .pick_folder()
+            .await
+            .map(|h| h.path().to_path_buf());
+        if let Some(path) = folder {
+            let _ = tx.send(path); // receiver dropped on app exit — harmless.
+        }
+    };
+    // `spawn` runs the future on a pool thread, so awaiting the panel does
+    // NOT occupy the main-thread run loop that macOS needs to draw it.
+    AsyncComputeTaskPool::get().spawn(task).detach();
+}
+
+/// Apply a resolved folder pick: record it and (re)start the scan. If the
+/// pick was launched from onboarding (`advance_on_resolve`), also transition
+/// to `InWorld`.
+pub fn poll_folder_pick(
+    mut rx: ResMut<FolderPickRx>,
+    mut import: ResMut<crate::audio::ImportState>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    let Some(channel) = &rx.rx else { return };
+    let Ok(folder) = channel.lock().unwrap().try_recv() else {
+        return;
+    };
+    rx.rx = None;
+    crate::settings::record_folder(&folder);
+    crate::audio::start_import(folder, &mut import);
+    if rx.advance_on_resolve {
+        rx.advance_on_resolve = false;
+        next_state.set(AppState::InWorld);
+    }
+}
+
 /// Hover/press tint + broadcast presses as [`UiAction`] messages.
 pub fn dispatch_buttons(
     mut interactions: Query<(&Interaction, &UiButton, &mut BackgroundColor), Changed<Interaction>>,
@@ -93,22 +166,16 @@ pub fn onboarding_actions(
     mut next_state: ResMut<NextState<AppState>>,
     mut onboarding: ResMut<crate::Onboarding>,
     mut comfort: ResMut<Comfort>,
-    mut import: ResMut<crate::audio::ImportState>,
+    mut folder_pick: ResMut<FolderPickRx>,
 ) {
     for UiAction(action) in actions.read() {
         match action {
             ButtonAction::Start => {
-                // Native folder picker (blocks the main thread while the
-                // modal is open — required on macOS anyway). Cancelling
-                // stays on the onboarding; "Skip for now" is the way past.
-                if let Some(folder) = rfd::FileDialog::new()
-                    .set_title("Choose your music folder")
-                    .pick_folder()
-                {
-                    crate::settings::record_folder(&folder);
-                    crate::audio::start_import(folder, &mut import);
-                    next_state.set(AppState::InWorld);
-                }
+                // Async native picker (see `launch_folder_pick`). Cancelling
+                // the dialog stays on the onboarding; "Skip for now" is the
+                // explicit way past without importing.
+                folder_pick.advance_on_resolve = true;
+                launch_folder_pick(&mut folder_pick);
             }
             ButtonAction::Skip => next_state.set(AppState::InWorld),
             ButtonAction::StartGentle => {
@@ -129,22 +196,17 @@ pub fn overlay_actions(
     mut stack: ResMut<OverlayStack>,
     mut paused: ResMut<Paused>,
     mut playback: ResMut<Playback>,
-    mut import: ResMut<crate::audio::ImportState>,
+    mut folder_pick: ResMut<FolderPickRx>,
 ) {
     for UiAction(action) in actions.read() {
         match action {
             ButtonAction::ImportFolder => {
-                // The in-world "Import folder" button (library sidebar). Same
-                // native picker path as onboarding (blocks main thread while
-                // the modal is open — required on macOS anyway). Replacing the
-                // queue is handled by poll_import on the first batch.
-                if let Some(folder) = rfd::FileDialog::new()
-                    .set_title("Choose your music folder")
-                    .pick_folder()
-                {
-                    crate::settings::record_folder(&folder);
-                    crate::audio::start_import(folder, &mut import);
-                }
+                // The in-world "Import folder" button (library sidebar). Async
+                // native picker (see `launch_folder_pick`); the resolved path
+                // replaces the queue via `poll_import` on the first batch.
+                // No state transition here — we're already in-world.
+                folder_pick.advance_on_resolve = false;
+                launch_folder_pick(&mut folder_pick);
             }
             ButtonAction::Resume => {
                 paused.0 = false;

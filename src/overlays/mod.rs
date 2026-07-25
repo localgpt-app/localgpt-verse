@@ -16,8 +16,8 @@ mod settings;
 mod widgets;
 
 pub use actions::{
-    UiAction, app_actions, comfort_actions, dispatch_buttons, onboarding_actions, overlay_actions,
-    overlay_scroll, queue_actions, world_actions,
+    FolderPickRx, UiAction, app_actions, comfort_actions, dispatch_buttons, onboarding_actions,
+    overlay_actions, overlay_scroll, poll_folder_pick, queue_actions, world_actions,
 };
 pub use credits::sync_credits_overlay;
 pub use library::{LibraryFilter, library_actions, sync_library_overlay};
