@@ -19,6 +19,7 @@ mod ml;
 mod overlays;
 mod playback;
 mod recipe;
+mod scope;
 mod settings;
 mod theme;
 mod world;
@@ -231,7 +232,6 @@ fn main() {
     .init_resource::<audio::AudioPlayer>()
     .init_resource::<audio::AudioTap>()
     .init_resource::<audio::ImportState>()
-    .init_resource::<analysis::AnalysisStore>()
     .init_resource::<overlays::FolderPickRx>()
     .init_resource::<world_assets::WorldAssets>()
     .init_resource::<world_assets::WorldLayout>()
@@ -387,19 +387,16 @@ fn main() {
         );
     }
 
-    // M7 agent: create the (bridge, channels) pair up-front so the analysis
-    // worker (a std::thread) can reach the bridge via the global install while
-    // Bevy owns the executor (channels + name registry). Under `llm` only;
-    // absent otherwise. Done here (after the builder chain) because a cfg on a
-    // chained call breaks its receiver.
+    // M7 agent: Bevy owns the executor (channels + name registry); the analysis
+    // worker gets the matching bridge handed to it at construction. Built
+    // before the worker so the bridge exists when the worker starts — the
+    // ordering the old `OnceLock` global was working around.
+    #[cfg_attr(not(feature = "llm"), allow(unused_mut))]
+    let mut worker_deps = analysis::WorkerDeps::default();
     #[cfg(feature = "llm")]
     {
         let (agent_bridge, agent_channels) = agent::create_channels();
-        // Install the bridge globally so the worker thread (spawned in
-        // AnalysisStore::default, which runs before this point) can find it.
-        // The worker checks `agent_bridge()` per-track, so a late install is
-        // fine: tracks analyzed before install simply skip the agent tier.
-        agent::install_bridge(agent_bridge);
+        worker_deps.agent_bridge = Some(agent_bridge);
         app.insert_resource(agent::AgentExecutor {
             channels: agent_channels,
             registry: agent::NameRegistry::default(),
@@ -408,6 +405,17 @@ fn main() {
         // Replay a cached SceneBuild when the current track has one (no LLM
         // re-run). Runs after drain so live-issued and replayed commands agree.
         app.add_systems(Update, agent::replay_cached_build);
+    }
+
+    // The analysis worker is the app's one long-lived owner of heavyweight
+    // state (the CLAP, demucs, and recipe models), so it mounts in a scope
+    // whose disposer joins it rather than abandoning it. See `scope`.
+    analysis::mount_analysis(app.world_mut(), worker_deps);
+
+    // `REVERIE_SCOPES=1 cargo run` lists what is mounted and what each unit
+    // will unwind, so a registration that fails to dispose is findable.
+    if std::env::var("REVERIE_SCOPES").is_ok() {
+        scope::describe(app.world());
     }
 
     app.run();

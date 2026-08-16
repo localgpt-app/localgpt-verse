@@ -562,13 +562,39 @@ pub struct AnalysisStore {
     pending: HashSet<String>,
     tx: Sender<(String, PathBuf)>,
     rx: Mutex<Receiver<WorkerResult>>,
+    /// Kept so [`shutdown`](AnalysisStore::shutdown) can join the worker rather
+    /// than merely dropping its channel. `None` only after shutdown took it.
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
-impl Default for AnalysisStore {
-    fn default() -> Self {
+/// What the analysis worker needs from the app.
+///
+/// Passed in at construction so the worker owns no globals: it holds exactly
+/// what it was handed, and dropping the store drops those handles with it.
+#[derive(Default)]
+pub struct WorkerDeps {
+    /// The agent bridge for the M7 recipe tier. `None` leaves the tier off.
+    #[cfg(feature = "llm")]
+    pub agent_bridge: Option<std::sync::Arc<crate::agent::AgentBridge>>,
+}
+
+impl AnalysisStore {
+    /// Start the analysis worker and return the store that owns it.
+    ///
+    /// Construction is explicit rather than `Default` because it spawns a
+    /// thread that loads the CLAP, demucs, and recipe models — hundreds of MB
+    /// of state that the caller must be able to release. Pair every `spawn`
+    /// with [`shutdown`](AnalysisStore::shutdown), or mount it in a
+    /// [`crate::scope::Scope`] that does.
+    pub fn spawn(deps: WorkerDeps) -> Self {
         let (req_tx, req_rx) = channel::<(String, PathBuf)>();
         let (res_tx, res_rx) = channel::<WorkerResult>();
-        std::thread::spawn(move || {
+        let worker = std::thread::spawn(move || {
+            // Moved in so the worker owns its dependencies for its whole life.
+            // Without `llm` the struct is empty; destructuring consumes it so
+            // there is still one construction path and no unused binding.
+            #[cfg(not(feature = "llm"))]
+            let WorkerDeps {} = deps;
             // M5: one CLAP model per worker thread (None without the `ml`
             // feature or the model file — rules keep running either way).
             #[cfg(feature = "ml")]
@@ -667,7 +693,7 @@ impl Default for AnalysisStore {
                 // stream is inspectable for debugging.
                 #[cfg(feature = "llm")]
                 let analysis = if analysis.build.is_none()
-                    && let Some(bridge) = crate::agent::agent_bridge()
+                    && let Some(bridge) = deps.agent_bridge.clone()
                     && let Some(model) = recipe_model.as_mut()
                 {
                     let m = model.model_mut();
@@ -698,7 +724,28 @@ impl Default for AnalysisStore {
             pending: HashSet::new(),
             tx: req_tx,
             rx: Mutex::new(res_rx),
+            worker: Some(worker),
         }
+    }
+
+    /// Stop the worker and wait for it to exit.
+    ///
+    /// Drops the request sender so the worker's `for (id, path) in req_rx` loop
+    /// ends, then joins. A request already in flight (a multi-second decode plus
+    /// model inference) finishes first — that is the point: the CLAP, demucs,
+    /// and recipe models the worker owns are released before this returns,
+    /// rather than being abandoned mid-use.
+    ///
+    /// Bounding the wait would need a cancel flag checked inside `analyze()`;
+    /// today a shutdown during analysis blocks for the rest of that track.
+    pub fn shutdown(mut self) -> Result<(), String> {
+        let Some(worker) = self.worker.take() else {
+            return Ok(());
+        };
+        drop(self);
+        worker
+            .join()
+            .map_err(|_| "analysis worker panicked".to_string())
     }
 }
 
@@ -753,6 +800,27 @@ impl AnalysisStore {
         save_sidecar(id, analysis);
         Some(pinned)
     }
+}
+
+/// The scope name the analysis worker mounts under.
+pub const ANALYSIS_SCOPE: &str = "analysis";
+
+/// Mount the analysis worker as a disposable unit.
+///
+/// Unmounting `ANALYSIS_SCOPE` removes the store and joins the worker, which
+/// releases the models it holds. This is the app's demonstration of the
+/// registration-carries-its-undo rule: the resource and the thread are
+/// registered together, so they cannot be released apart.
+pub fn mount_analysis(world: &mut World, deps: WorkerDeps) {
+    crate::scope::mount(world, ANALYSIS_SCOPE, |scope, world| {
+        world.insert_resource(AnalysisStore::spawn(deps));
+        scope.defer("AnalysisStore + worker thread", |world| {
+            let Some(store) = world.remove_resource::<AnalysisStore>() else {
+                return Ok(());
+            };
+            store.shutdown()
+        });
+    });
 }
 
 /// Request analysysis for the current + next few tracks, drain worker results,
@@ -915,5 +983,51 @@ mod tests {
         assert_eq!(curve.len(), 10);
         assert!(curve.iter().all(|v| (0.0..=1.0).contains(v)));
         assert!(curve[9] > curve[0]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Worker lifecycle
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn unmounting_removes_the_store_and_joins_the_worker() {
+        let mut world = World::new();
+
+        mount_analysis(&mut world, WorkerDeps::default());
+        assert!(world.contains_resource::<AnalysisStore>());
+        assert!(
+            world
+                .resource::<crate::scope::Scopes>()
+                .is_mounted(ANALYSIS_SCOPE)
+        );
+
+        crate::scope::unmount(&mut world, ANALYSIS_SCOPE);
+
+        // The disposer joined the worker before returning, so by here the
+        // thread has exited and the models it owned are released.
+        assert!(!world.contains_resource::<AnalysisStore>());
+        assert!(
+            !world
+                .resource::<crate::scope::Scopes>()
+                .is_mounted(ANALYSIS_SCOPE)
+        );
+    }
+
+    #[test]
+    fn the_worker_can_be_remounted_after_unmounting() {
+        let mut world = World::new();
+
+        for _ in 0..3 {
+            mount_analysis(&mut world, WorkerDeps::default());
+            assert!(world.contains_resource::<AnalysisStore>());
+            crate::scope::unmount(&mut world, ANALYSIS_SCOPE);
+            assert!(!world.contains_resource::<AnalysisStore>());
+        }
+    }
+
+    #[test]
+    fn shutdown_joins_a_worker_with_no_requests_in_flight() {
+        let store = AnalysisStore::spawn(WorkerDeps::default());
+        assert!(store.shutdown().is_ok());
     }
 }

@@ -89,25 +89,6 @@ impl AgentBridge {
     }
 }
 
-/// Global handle to the bridge, set once in `main()` before the analysis worker
-/// spawns, and read by the worker to run agent sessions. `None` until `main()`
-/// installs it (or when the `llm` feature is off). Using a `OnceLock` here is
-/// the simplest way to thread an Arc from the Bevy app setup into the worker's
-/// std::thread without restructuring `AnalysisStore::default()`.
-static AGENT_BRIDGE: std::sync::OnceLock<Option<Arc<AgentBridge>>> = std::sync::OnceLock::new();
-
-/// Install the bridge globally. Called once from `main()` under the `llm`
-/// feature. The worker reads it via [`agent_bridge`].
-pub fn install_bridge(bridge: Arc<AgentBridge>) {
-    let _ = AGENT_BRIDGE.set(Some(bridge));
-}
-
-/// The bridge the analysis worker uses to run agent sessions, or `None` when
-/// the feature is off or `main()` hasn't installed it yet.
-pub fn agent_bridge() -> Option<Arc<AgentBridge>> {
-    AGENT_BRIDGE.get().and_then(|opt| opt.clone())
-}
-
 /// The Bevy-side channels, held as a resource and drained each frame.
 pub struct AgentChannels {
     pub cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,
