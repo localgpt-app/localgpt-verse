@@ -89,6 +89,12 @@ impl AgentBridge {
     }
 }
 
+/// The bridge, published by `AgentPlugin` so the analysis worker can be handed
+/// it at construction. A resource rather than a global: it is owned by the app,
+/// dropped with it, and visible to anything that needs to know the tier is live.
+#[derive(bevy::prelude::Resource)]
+pub struct AgentBridgeHandle(pub Arc<AgentBridge>);
+
 /// The Bevy-side channels, held as a resource and drained each frame.
 pub struct AgentChannels {
     pub cmd_rx: mpsc::UnboundedReceiver<AgentCommand>,

@@ -18,6 +18,7 @@ mod llm;
 mod ml;
 mod overlays;
 mod playback;
+mod plugins;
 mod recipe;
 mod scope;
 mod settings;
@@ -30,7 +31,7 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_dis
 
 use hud::HudActivity;
 use playback::{Beat, Playback};
-use theme::{Fonts, Theme};
+use theme::Theme;
 
 // ---------------------------------------------------------------------------
 // Shared app state & resources
@@ -197,8 +198,7 @@ fn main() {
     };
     // Stress mode measures true frame cost — vsync hides real throughput
     // behind display pacing (and background throttling skews it further).
-    let stress = world_assets::StressTest::from_env();
-    if stress.is_some() {
+    if world_assets::StressTest::from_env().is_some() {
         window.present_mode = bevy::window::PresentMode::AutoNoVsync;
     }
 
@@ -207,210 +207,16 @@ fn main() {
         primary_window: Some(window),
         ..default()
     }))
-    .insert_resource(ClearColor(theme::BASE))
-    .init_state::<AppState>()
-    .init_resource::<Theme>()
-    .init_resource::<Playback>()
-    .init_resource::<Beat>()
-    .init_resource::<HudActivity>()
-    .init_resource::<CameraMode>()
-    .init_resource::<Paused>()
-    .init_resource::<QueueOpen>()
-    .init_resource::<OverlayStack>()
-    .init_resource::<overlays::LibraryFilter>()
-    .init_resource::<Photo>()
-    .init_resource::<Onboarding>()
-    .init_resource::<WorldIntensity>()
-    .init_resource::<recipe::ActiveRecipe>()
-    .init_resource::<Comfort>()
-    .init_resource::<WorldClock>()
-    .init_resource::<world::PaletteWash>()
-    .init_resource::<world::HeldRing>()
-    .init_resource::<AudioActive>()
-    .init_resource::<SeekRequest>()
-    .init_resource::<Volume>()
-    .init_resource::<audio::AudioPlayer>()
-    .init_resource::<audio::AudioTap>()
-    .init_resource::<audio::ImportState>()
-    .init_resource::<overlays::FolderPickRx>()
-    .init_resource::<world_assets::WorldAssets>()
-    .init_resource::<world_assets::WorldLayout>()
-    // Setup.
-    .add_systems(
-        Startup,
-        (
-            world::setup_world,
-            world_assets::load_asset_manifest,
-            audio::init_audio,
-            auto_import,
-            // Load persisted settings (Comfort/Volume/etc.) and re-import the
-            // last folder, overriding the init_resource defaults.
-            apply_loaded_settings,
-        ),
-    )
-    .add_systems(OnEnter(AppState::FirstRun), overlays::spawn_first_run)
-    .add_systems(OnExit(AppState::FirstRun), overlays::despawn_first_run)
-    .add_systems(OnEnter(AppState::InWorld), hud::setup_hud)
-    // Always-on: buttons + a living world. The palette wash must write hues
-    // before the beat-glow rescale reads them, hence the chain.
-    .add_message::<overlays::UiAction>()
-    .add_systems(Update, ease_world_clock)
-    // Button presses broadcast as messages; the focused handlers run after
-    // the dispatcher within the frame.
-    .add_systems(
-        Update,
-        (
-            overlays::dispatch_buttons,
-            (
-                overlays::onboarding_actions,
-                overlays::overlay_actions,
-                overlays::world_actions,
-                overlays::comfort_actions,
-                overlays::app_actions,
-                overlays::queue_actions,
-                overlays::library_actions,
-            ),
-        )
-            .chain(),
-    )
-    .add_systems(Update, overlays::overlay_scroll)
-    // Persist settings changes (debounced to 1 write/sec).
-    .add_systems(Update, save_settings_debounced)
-    .add_systems(Update, world::spawn_particles)
-    .add_systems(Update, (world::palette_wash, world::animate_world).chain())
-    .add_systems(
-        Update,
-        world::sync_held_ring.run_if(in_state(AppState::InWorld)),
-    )
-    .add_systems(
-        Update,
-        (input_first_run, overlays::refresh_onboarding).run_if(in_state(AppState::FirstRun)),
-    )
-    // Audio: the import poll runs everywhere (the scan can start during
-    // onboarding); the player syncs only in-world ("audio starts at 0s" on
-    // materialize). Chained — each stage feeds the next within a frame. The
-    // folder pick is drained first so a freshly chosen path kicks off the
-    // scan before `poll_import` runs in the same frame.
-    .add_systems(Update, (overlays::poll_folder_pick, audio::poll_import).chain())
-    .add_systems(
-        Update,
-        (
-            audio::sync_track_playback,
-            audio::sync_pause,
-            audio::apply_seek,
-            audio::apply_volume,
-            audio::sync_clock,
-        )
-            .chain()
-            .run_if(in_state(AppState::InWorld)),
-    )
-    .add_systems(
-        Update,
-        world::camera_control
-            .run_if(in_state(AppState::InWorld))
-            .run_if(not_paused),
-    )
-    // Transport & beat, ordered: analysis applies the grid/sections/mood on a
-    // track change, the live tap feeds energy/onsets, then advance decays the
-    // pulse, derives phase, and (when simulated) moves the clock.
-    .add_systems(
-        Update,
-        (
-            analysis::sync_analysis,
-            audio::update_beat_from_tap,
-            playback::advance_playback,
-        )
-            .chain()
-            .run_if(in_state(AppState::InWorld)),
-    )
-    // In-world: input, HUD, overlays (nested groups — flat tuples cap at 20).
-    .add_systems(
-        Update,
-        (
-            (
-                input_in_world,
-                world_assets::populate_world_props,
-                world_assets::rise_props,
-            ),
-            (
-                hud::hud_depth,
-                hud::apply_hud_alpha,
-                hud::update_hud_accent,
-                hud::update_hud_content,
-                hud::update_mode_tabs,
-                hud::update_reticle,
-                hud::update_section_notches,
-                hud::update_transport,
-                hud::seek_strip_scrub,
-                hud::transport_clicks,
-                hud::mode_tab_clicks,
-                hud::chip_clicks,
-            ),
-            (
-                overlays::sync_pause_overlay,
-                overlays::sync_queue_overlay,
-                overlays::sync_settings_overlay,
-                overlays::sync_credits_overlay,
-                overlays::sync_library_overlay,
-                overlays::update_intensity_knob,
-                overlays::update_comfort_toggles,
-            ),
-        )
-            .run_if(in_state(AppState::InWorld)),
-    )
-    .add_systems(Update, photo_capture.run_if(in_state(AppState::InWorld)));
-
-    // Fonts must exist before any schedule runs: some `OnEnter` systems read
-    // them, and the state machine's initial transition fires before a
-    // `PreStartup` system would. Load them now that plugins (and the
-    // `AssetServer`) have been built.
-    let asset_server = app.world().resource::<AssetServer>().clone();
-    app.insert_resource(Fonts::load(&asset_server));
-
-    // Smoke test: `REVERIE_SMOKE=1 cargo run` drives the app through every UI
-    // surface (world → queue → pause) then exits — a headful boot check.
-    if std::env::var("REVERIE_SMOKE").is_ok() {
-        app.add_systems(Update, smoke_drive);
-    }
-
-    // Perf validation: `REVERIE_STRESS=5000 cargo run` fills the world with
-    // prop instances and logs frame rates, then exits after 30 s. Skips
-    // onboarding so the measurement starts immediately (needs the asset pack).
-    if let Some(stress) = stress {
-        app.insert_resource(stress);
-        app.insert_state(AppState::InWorld);
-        app.add_systems(
-            Update,
-            (world_assets::stress_spawn, world_assets::stress_report)
-                .chain()
-                .run_if(in_state(AppState::InWorld)),
-        );
-    }
-
-    // M7 agent: Bevy owns the executor (channels + name registry); the analysis
-    // worker gets the matching bridge handed to it at construction. Built
-    // before the worker so the bridge exists when the worker starts — the
-    // ordering the old `OnceLock` global was working around.
-    #[cfg_attr(not(feature = "llm"), allow(unused_mut))]
-    let mut worker_deps = analysis::WorkerDeps::default();
-    #[cfg(feature = "llm")]
-    {
-        let (agent_bridge, agent_channels) = agent::create_channels();
-        worker_deps.agent_bridge = Some(agent_bridge);
-        app.insert_resource(agent::AgentExecutor {
-            channels: agent_channels,
-            registry: agent::NameRegistry::default(),
-        });
-        app.add_systems(Update, agent::drain_agent_commands);
-        // Replay a cached SceneBuild when the current track has one (no LLM
-        // re-run). Runs after drain so live-issued and replayed commands agree.
-        app.add_systems(Update, agent::replay_cached_build);
-    }
+    // What the app is made of; see `plugins`.
+    .add_plugins(plugins::ReveriePlugins);
 
     // The analysis worker is the app's one long-lived owner of heavyweight
     // state (the CLAP, demucs, and recipe models), so it mounts in a scope
-    // whose disposer joins it rather than abandoning it. See `scope`.
-    analysis::mount_analysis(app.world_mut(), worker_deps);
+    // whose disposer joins it rather than abandoning it. Mounted here rather
+    // than from a plugin because plugins are add-only: runtime lifecycle needs
+    // something that can be unwound. See `scope`.
+    let deps = analysis::WorkerDeps::from_world(app.world());
+    analysis::mount_analysis(app.world_mut(), deps);
 
     // `REVERIE_SCOPES=1 cargo run` lists what is mounted and what each unit
     // will unwind, so a registration that fails to dispose is findable.

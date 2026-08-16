@@ -578,6 +578,24 @@ pub struct WorkerDeps {
     pub agent_bridge: Option<std::sync::Arc<crate::agent::AgentBridge>>,
 }
 
+impl WorkerDeps {
+    /// Collect the worker's dependencies from what the plugins published.
+    ///
+    /// Under `llm` this reads the bridge that `AgentPlugin` inserted, so the
+    /// worker is handed a live handle instead of reaching for a global. Absent
+    /// resource means the tier stays off, which is the same graceful
+    /// degradation as a missing model file.
+    #[cfg_attr(not(feature = "llm"), allow(unused_variables))]
+    pub fn from_world(world: &World) -> Self {
+        Self {
+            #[cfg(feature = "llm")]
+            agent_bridge: world
+                .get_resource::<crate::agent::AgentBridgeHandle>()
+                .map(|handle| handle.0.clone()),
+        }
+    }
+}
+
 impl AnalysisStore {
     /// Start the analysis worker and return the store that owns it.
     ///
