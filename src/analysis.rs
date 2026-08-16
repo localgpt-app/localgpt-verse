@@ -60,14 +60,29 @@ pub struct TrackAnalysis {
     /// Per-second loudness envelope, normalized 0..1.
     pub energy: Vec<f32>,
     /// Mood index into [`crate::theme::MOODS`] from the quadrant mapping.
+    ///
+    /// Kept as the compatibility representation; read through
+    /// [`TrackAnalysis::mood_index`], which prefers `mood_id`.
     pub mood: usize,
+    /// Stable id of `mood` ([`crate::theme::WorldMood::id`]).
+    ///
+    /// Written since sidecar v2; absent in older files, which then resolve by
+    /// index. Both are written so a sidecar stays readable by a build that
+    /// predates ids — old sidecars load as `None` with no `SIDECAR_VERSION`
+    /// bump needed, the same contract as `recipe` and `build`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mood_id: Option<String>,
     /// Integrated loudness (LUFS) for playback normalization; `None` when
     /// measurement failed (silence/too short).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loudness_lufs: Option<f32>,
     /// "Keep this world": a pinned mood that overrides `mood` (PLAN.md §5.3).
+    /// Read through [`TrackAnalysis::pinned_mood_index`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_mood: Option<usize>,
+    /// Stable id of `pinned_mood`, on the same contract as `mood_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_mood_id: Option<String>,
     /// The pinned layout seed — with `pinned_mood`, the full world identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_seed: Option<u64>,
@@ -101,6 +116,42 @@ pub struct TrackAnalysis {
     /// load as `None` (no `SIDECAR_VERSION` bump needed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<crate::agent_types::SceneBuild>,
+}
+
+impl TrackAnalysis {
+    /// The live mood index, preferring the stable id over the stored position.
+    ///
+    /// Use this rather than reading `mood` directly: the raw field is only
+    /// meaningful next to the mood list that was live when it was written.
+    pub fn mood_index(&self) -> usize {
+        crate::theme::resolve_mood(crate::theme::MOODS, self.mood_id.as_deref(), self.mood)
+    }
+
+    /// The pinned mood as a live index, when "Keep this world" is set.
+    pub fn pinned_mood_index(&self) -> Option<usize> {
+        let pinned = self.pinned_mood?;
+        Some(crate::theme::resolve_mood(
+            crate::theme::MOODS,
+            self.pinned_mood_id.as_deref(),
+            pinned,
+        ))
+    }
+
+    /// Set the computed mood, keeping the index and its stable id in step.
+    ///
+    /// Only the CLAP tier revises a mood after analysis, so this has no caller
+    /// without `ml`.
+    #[cfg_attr(not(feature = "ml"), allow(dead_code))]
+    pub fn set_mood(&mut self, index: usize) {
+        self.mood = index;
+        self.mood_id = Some(crate::theme::mood_id(index).to_string());
+    }
+
+    /// Set (or clear) the pinned mood, keeping both representations in step.
+    pub fn set_pinned_mood(&mut self, index: Option<usize>) {
+        self.pinned_mood = index;
+        self.pinned_mood_id = index.map(|i| crate::theme::mood_id(i).to_string());
+    }
 }
 
 pub(crate) fn cache_dir() -> Option<PathBuf> {
@@ -537,8 +588,10 @@ fn analyze(path: &Path) -> Option<TrackAnalysis> {
         sections,
         energy,
         mood,
+        mood_id: Some(crate::theme::mood_id(mood).to_string()),
         loudness_lufs,
         pinned_mood: None,
+        pinned_mood_id: None,
         pinned_seed: None,
         embedding: None,
         stems: None,
@@ -663,7 +716,7 @@ impl AnalysisStore {
                         Some((embedding, mood)) => {
                             info!("CLAP embedded {} → mood {mood}", path.display());
                             let mut a = analysis;
-                            a.mood = mood;
+                            a.set_mood(mood);
                             a.embedding = Some(embedding);
                             save_sidecar(&id, &a);
                             a
@@ -828,11 +881,11 @@ impl AnalysisStore {
     pub fn toggle_pin(&mut self, id: &str, mood: usize, seed: u64) -> Option<bool> {
         let analysis = self.map.get_mut(id)?;
         let pinned = if analysis.pinned_mood.is_some() {
-            analysis.pinned_mood = None;
+            analysis.set_pinned_mood(None);
             analysis.pinned_seed = None;
             false
         } else {
-            analysis.pinned_mood = Some(mood);
+            analysis.set_pinned_mood(Some(mood));
             analysis.pinned_seed = Some(seed);
             true
         };
@@ -933,7 +986,7 @@ pub fn sync_analysis(
             } else {
                 beat.grid = false;
             }
-            let mood = a.pinned_mood.unwrap_or(a.mood);
+            let mood = a.pinned_mood_index().unwrap_or_else(|| a.mood_index());
             layout.seed = a
                 .pinned_seed
                 .unwrap_or_else(|| crate::world_assets::path_seed(current_path.as_ref().unwrap()));
@@ -1068,5 +1121,62 @@ mod tests {
     fn shutdown_joins_a_worker_with_no_requests_in_flight() {
         let store = AnalysisStore::spawn(WorkerDeps::default());
         assert!(store.shutdown().is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Sidecar mood compatibility
+    // -----------------------------------------------------------------------
+
+    /// A sidecar as written before mood ids existed. Every field that has no
+    /// serde default must be present, which is what makes this a real
+    /// regression test rather than a shape test.
+    const SIDECAR_WITHOUT_ID: &str = r#"{
+        "version": 2, "duration": 180.0, "bpm": 120.0, "beat_offset": 0.1,
+        "sections": [0.0, 0.5], "energy": [0.1, 0.2], "mood": 2
+    }"#;
+
+    #[test]
+    fn a_sidecar_without_an_id_still_loads_and_resolves_by_index() {
+        let analysis: TrackAnalysis = serde_json::from_str(SIDECAR_WITHOUT_ID).unwrap();
+        assert_eq!(analysis.mood_id, None);
+        assert_eq!(analysis.mood_index(), 2);
+        assert_eq!(analysis.pinned_mood_index(), None);
+    }
+
+    #[test]
+    fn a_written_sidecar_carries_both_representations() {
+        let mut analysis: TrackAnalysis = serde_json::from_str(SIDECAR_WITHOUT_ID).unwrap();
+        analysis.set_mood(1);
+        analysis.set_pinned_mood(Some(3));
+
+        let json = serde_json::to_string(&analysis).unwrap();
+        let reloaded: TrackAnalysis = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(reloaded.mood, 1);
+        assert_eq!(reloaded.mood_id.as_deref(), Some(crate::theme::mood_id(1)));
+        assert_eq!(reloaded.mood_index(), 1);
+        assert_eq!(reloaded.pinned_mood_index(), Some(3));
+    }
+
+    #[test]
+    fn the_id_wins_when_it_disagrees_with_the_stored_index() {
+        let mut analysis: TrackAnalysis = serde_json::from_str(SIDECAR_WITHOUT_ID).unwrap();
+        // What a reordering looks like from the reader's side: the index says
+        // one world, the id says another.
+        analysis.mood = 0;
+        analysis.mood_id = Some(crate::theme::mood_id(3).to_string());
+
+        assert_eq!(analysis.mood_index(), 3);
+    }
+
+    #[test]
+    fn clearing_a_pin_clears_both_representations() {
+        let mut analysis: TrackAnalysis = serde_json::from_str(SIDECAR_WITHOUT_ID).unwrap();
+        analysis.set_pinned_mood(Some(2));
+        analysis.set_pinned_mood(None);
+
+        assert_eq!(analysis.pinned_mood, None);
+        assert_eq!(analysis.pinned_mood_id, None);
+        assert_eq!(analysis.pinned_mood_index(), None);
     }
 }

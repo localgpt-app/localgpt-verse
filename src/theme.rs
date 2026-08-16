@@ -109,6 +109,15 @@ impl Fonts {
 /// the rest paints the 3D backdrop so the HUD always overlays a live world.
 #[derive(Clone, Copy)]
 pub struct WorldMood {
+    /// Stable identity, independent of this mood's position in [`MOODS`].
+    ///
+    /// Everything durable refers to a mood by **this**, not by index: sidecars
+    /// persist it, and the asset manifest may carry it (see
+    /// [`crate::world_assets::AssetEntry`]). Positions shift whenever a mood is
+    /// added, removed, or reordered, and a stored index would then silently
+    /// resolve to a different world. Never change an existing id — that is the
+    /// one edit this field cannot survive.
+    pub id: &'static str,
     /// Display name shown in the HUD, e.g. "EMBER FLATS".
     pub world_name: &'static str,
     /// The sampled accent — legible on the veil (OKLCH L clamped 0.78–0.86).
@@ -130,6 +139,7 @@ pub struct WorldMood {
 pub const MOODS: &[WorldMood] = &[
     // Dawn Chorus — warm ambers. Accent #FFB38A.
     WorldMood {
+        id: "ember-flats",
         world_name: "EMBER FLATS",
         accent: Color::srgb(1.0, 0.702, 0.541),
         sky_top: Color::srgb(1.0, 0.851, 0.690),
@@ -140,6 +150,7 @@ pub const MOODS: &[WorldMood] = &[
     },
     // Neon Surge — cyan over deep indigo/magenta. Accent #62F5FF.
     WorldMood {
+        id: "velvet-circuit",
         world_name: "VELVET CIRCUIT",
         accent: Color::srgb(0.384, 0.961, 1.0),
         sky_top: Color::srgb(0.141, 0.063, 0.329),
@@ -150,6 +161,7 @@ pub const MOODS: &[WorldMood] = &[
     },
     // Night Bloom — cool aqua. Accent #A8D8DE.
     WorldMood {
+        id: "tide-gardens",
         world_name: "TIDE GARDENS",
         accent: Color::srgb(0.659, 0.847, 0.871),
         sky_top: Color::srgb(0.071, 0.200, 0.243),
@@ -160,6 +172,7 @@ pub const MOODS: &[WorldMood] = &[
     },
     // Glass Runner — pale ice over violet. Accent #8EF4FF.
     WorldMood {
+        id: "glass-expanse",
         world_name: "GLASS EXPANSE",
         accent: Color::srgb(0.557, 0.957, 1.0),
         sky_top: Color::srgb(0.137, 0.106, 0.176),
@@ -169,6 +182,36 @@ pub const MOODS: &[WorldMood] = &[
         ambient: Color::srgb(0.62, 0.78, 0.92),
     },
 ];
+
+/// Resolve a durable mood reference to a live index into `moods`.
+///
+/// Callers hold two things: an `id` written by whatever produced the record,
+/// and an `index` that was the only representation before ids existed. The id
+/// wins whenever it matches, which is what lets [`MOODS`] be reordered or
+/// extended without silently repointing every sidecar and manifest entry at a
+/// different world.
+///
+/// Falls back to `index` (wrapped) when the id is absent — an older sidecar —
+/// or unrecognised — a mood that has since been removed or renamed. Degrading
+/// to some world is right here: a missing world should cost the user their
+/// pinned look, not their library.
+pub fn resolve_mood(moods: &[WorldMood], id: Option<&str>, index: usize) -> usize {
+    if let Some(id) = id
+        && let Some(found) = moods.iter().position(|mood| mood.id == id)
+    {
+        return found;
+    }
+    if moods.is_empty() {
+        0
+    } else {
+        index % moods.len()
+    }
+}
+
+/// The stable id of the mood at `index`, for writing into a durable record.
+pub fn mood_id(index: usize) -> &'static str {
+    MOODS[index % MOODS.len()].id
+}
 
 /// The currently playing world's palette, plus a smoothed accent used by the
 /// chrome. Index rotates as tracks change.
@@ -202,5 +245,77 @@ mod tests {
     fn mood_index_wraps() {
         let t = Theme { mood: MOODS.len() };
         assert_eq!(t.current().world_name, MOODS[0].world_name);
+    }
+
+    #[test]
+    fn mood_ids_are_unique() {
+        let mut ids: Vec<&str> = MOODS.iter().map(|m| m.id).collect();
+        ids.sort_unstable();
+        let count = ids.len();
+        ids.dedup();
+        assert_eq!(ids.len(), count, "two moods share an id");
+    }
+
+    /// The whole point of the id: a record written against one ordering still
+    /// resolves to the same world after the list is reordered or extended.
+    #[test]
+    fn a_stored_id_survives_reordering() {
+        let original = MOODS;
+        let mut shuffled: Vec<WorldMood> = original.to_vec();
+        shuffled.reverse();
+
+        for (index, mood) in original.iter().enumerate() {
+            let resolved = resolve_mood(&shuffled, Some(mood.id), index);
+            assert_eq!(
+                shuffled[resolved].id, mood.id,
+                "`{}` resolved to the wrong world after reordering",
+                mood.id
+            );
+        }
+    }
+
+    #[test]
+    fn a_stored_id_survives_an_insertion() {
+        let mut extended: Vec<WorldMood> = MOODS.to_vec();
+        let newcomer = WorldMood {
+            id: "new-world",
+            ..MOODS[0]
+        };
+        extended.insert(0, newcomer);
+
+        // Written when "glass-expanse" was at index 3; it is at 4 now.
+        let resolved = resolve_mood(&extended, Some("glass-expanse"), 3);
+        assert_eq!(extended[resolved].id, "glass-expanse");
+        // And the positional reading is exactly the silent corruption the id
+        // prevents.
+        assert_ne!(extended[3].id, "glass-expanse");
+    }
+
+    #[test]
+    fn an_absent_id_falls_back_to_the_stored_index() {
+        // A sidecar written before ids existed.
+        assert_eq!(resolve_mood(MOODS, None, 2), 2);
+        assert_eq!(resolve_mood(MOODS, None, MOODS.len() + 1), 1);
+    }
+
+    #[test]
+    fn an_unknown_id_falls_back_rather_than_failing() {
+        // A mood that has since been removed: the user loses their pinned look,
+        // not their library.
+        let resolved = resolve_mood(MOODS, Some("retired-world"), 2);
+        assert_eq!(resolved, 2);
+    }
+
+    #[test]
+    fn resolving_against_an_empty_list_is_not_a_panic() {
+        assert_eq!(resolve_mood(&[], Some("ember-flats"), 3), 0);
+        assert_eq!(resolve_mood(&[], None, 3), 0);
+    }
+
+    #[test]
+    fn mood_id_round_trips_through_resolve() {
+        for index in 0..MOODS.len() {
+            assert_eq!(resolve_mood(MOODS, Some(mood_id(index)), 999), index);
+        }
     }
 }

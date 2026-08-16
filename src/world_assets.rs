@@ -78,7 +78,22 @@ pub struct AssetEntry {
     pub file: String,
     pub tier: Tier,
     /// Index into [`crate::theme::MOODS`].
+    ///
+    /// Positional, and written by `fetch_polyhaven.py` in the separate
+    /// `reverie-assets` repo — so reordering [`crate::theme::MOODS`] silently
+    /// repoints all 52 assets, and nothing in this repo would catch it. Read
+    /// through [`AssetEntry::mood_index`], which prefers `mood_id`.
     pub mood: usize,
+    /// Stable mood id ([`crate::theme::WorldMood::id`]), when the manifest
+    /// carries one.
+    ///
+    /// Not yet emitted by the generator: adding it there is a change in another
+    /// repo, and the numeric field keeps working until it lands. Accepting it
+    /// now means a regenerated manifest is understood without a code change
+    /// here, and that a mood added or reordered in the meantime is a
+    /// recoverable mistake rather than a silent one.
+    #[serde(default)]
+    pub mood_id: Option<String>,
     #[serde(default = "one")]
     pub scale: f32,
     /// Native dimensions in metres `[x, y, z]` (from the source catalog) —
@@ -96,6 +111,11 @@ fn one() -> f32 {
 }
 
 impl AssetEntry {
+    /// The live mood index, preferring the stable id over the stored position.
+    pub fn mood_index(&self) -> usize {
+        crate::theme::resolve_mood(crate::theme::MOODS, self.mood_id.as_deref(), self.mood)
+    }
+
     /// Human tier name for the Credits row.
     pub fn tier_label(&self) -> &'static str {
         match self.tier {
@@ -339,7 +359,11 @@ pub fn populate_world_props(
     // Absent recipe → 1.0 (today's per-tier counts).
     let density = active_recipe.get().map(|r| r.density).unwrap_or(1.0);
 
-    let entries: Vec<_> = manifest.assets.iter().filter(|a| a.mood == mood).collect();
+    let entries: Vec<_> = manifest
+        .assets
+        .iter()
+        .filter(|a| a.mood_index() == mood)
+        .collect();
     let total: usize = entries
         .iter()
         .map(|e| (e.tier.count() as f32 * density).round().max(1.0) as usize)
@@ -387,7 +411,7 @@ pub fn populate_world_props(
         let hero_entries: Vec<_> = manifest
             .assets
             .iter()
-            .filter(|a| a.mood == mood && a.tier == Tier::Hero)
+            .filter(|a| a.mood_index() == mood && a.tier == Tier::Hero)
             .collect();
         for (i, landmark) in recipe.landmarks.iter().enumerate() {
             let Some(entry) = hero_entries.get(i % hero_entries.len()) else {
@@ -495,7 +519,11 @@ pub fn stress_spawn(
     };
     stress.spawned = true;
     let mood = theme.mood % crate::theme::MOODS.len();
-    let mood_entries: Vec<_> = manifest.assets.iter().filter(|a| a.mood == mood).collect();
+    let mood_entries: Vec<_> = manifest
+        .assets
+        .iter()
+        .filter(|a| a.mood_index() == mood)
+        .collect();
     let entries: Vec<_> = if mood_entries.is_empty() {
         manifest.assets.iter().collect()
     } else {
