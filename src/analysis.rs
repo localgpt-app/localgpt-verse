@@ -600,10 +600,13 @@ impl AnalysisStore {
     /// Start the analysis worker and return the store that owns it.
     ///
     /// Construction is explicit rather than `Default` because it spawns a
-    /// thread that loads the CLAP, demucs, and recipe models — hundreds of MB
-    /// of state that the caller must be able to release. Pair every `spawn`
-    /// with [`shutdown`](AnalysisStore::shutdown), or mount it in a
-    /// [`crate::scope::Scope`] that does.
+    /// thread that can come to own the CLAP, demucs, and recipe models —
+    /// hundreds of MB of state that the caller must be able to release. Pair
+    /// every `spawn` with [`shutdown`](AnalysisStore::shutdown), or mount it in
+    /// a [`crate::scope::Scope`] that does.
+    ///
+    /// The models load on the first track that needs one, not here; a library
+    /// whose sidecars are already written never loads any. See [`crate::tier`].
     pub fn spawn(deps: WorkerDeps) -> Self {
         let (req_tx, req_rx) = channel::<(String, PathBuf)>();
         let (res_tx, res_rx) = channel::<WorkerResult>();
@@ -613,17 +616,21 @@ impl AnalysisStore {
             // there is still one construction path and no unused binding.
             #[cfg(not(feature = "llm"))]
             let WorkerDeps {} = deps;
-            // M5: one CLAP model per worker thread (None without the `ml`
-            // feature or the model file — rules keep running either way).
+            // The tiers load on the first track that actually needs them, not
+            // here — a library whose sidecars are already written never loads a
+            // model at all. See `crate::tier`.
+            //
+            // M5: one CLAP model per worker thread (stays unavailable without
+            // the model file — rules keep running either way).
             #[cfg(feature = "ml")]
-            let mut clap = crate::ml::ClapModel::try_load();
+            let mut clap = crate::tier::Tier::<crate::ml::ClapModel>::Cold;
             // M7 stem tier (rides the same `ort` runtime as CLAP). Below the
             // recipe tier: stems are an input feature the recipe LLM consumes.
             #[cfg(feature = "ml")]
-            let mut stems = crate::demucs::StemModel::try_load();
+            let mut stems = crate::tier::Tier::<crate::demucs::StemModel>::Cold;
             // M7 recipe tier — top rung. `llm` feature + model file required.
             #[cfg(feature = "llm")]
-            let mut recipe_model = crate::llm::RecipeModel::try_load();
+            let mut recipe_model = crate::tier::Tier::<crate::llm::RecipeModel>::Cold;
             for (id, path) in req_rx {
                 let analysis = match load_sidecar(&id) {
                     Some(a) => a,
@@ -646,9 +653,13 @@ impl AnalysisStore {
                 };
                 // M5 upgrade pass: a sidecar with no embedding gets one (plus
                 // the zero-shot mood) even if rules analyzed it earlier.
+                // The `embedding.is_none()` test comes first so a track that
+                // already has one never triggers the 78 MB load.
                 #[cfg(feature = "ml")]
-                let analysis = match (clap.as_mut(), analysis.embedding.is_none()) {
-                    (Some(model), true) => match model.analyze_track(&path) {
+                let analysis = if analysis.embedding.is_none()
+                    && let Some(model) = clap.get_or_load(crate::ml::ClapModel::try_load)
+                {
+                    match model.analyze_track(&path) {
                         Some((embedding, mood)) => {
                             info!("CLAP embedded {} → mood {mood}", path.display());
                             let mut a = analysis;
@@ -658,14 +669,17 @@ impl AnalysisStore {
                             a
                         }
                         None => analysis,
-                    },
-                    _ => analysis,
+                    }
+                } else {
+                    analysis
                 };
                 // M7 stem upgrade pass: a sidecar with no stem curves gets them
                 // (separate rung from CLAP; reuses the same `ort` runtime).
                 #[cfg(feature = "ml")]
-                let analysis = match (stems.as_mut(), analysis.stems.is_none()) {
-                    (Some(model), true) => match model.analyze_track(&path) {
+                let analysis = if analysis.stems.is_none()
+                    && let Some(model) = stems.get_or_load(crate::demucs::StemModel::try_load)
+                {
+                    match model.analyze_track(&path) {
                         Some(curves) => {
                             info!("Demucs separated {} → 4 stems", path.display());
                             let mut a = analysis;
@@ -674,14 +688,17 @@ impl AnalysisStore {
                             a
                         }
                         None => analysis,
-                    },
-                    _ => analysis,
+                    }
+                } else {
+                    analysis
                 };
                 // M7 recipe upgrade pass — the top rung. Only when the LLM
                 // feature + model are present, and the sidecar lacks a recipe.
                 #[cfg(feature = "llm")]
-                let analysis = match (recipe_model.as_mut(), analysis.recipe.is_none()) {
-                    (Some(model), true) => match model.generate(&analysis) {
+                let analysis = if analysis.recipe.is_none()
+                    && let Some(model) = recipe_model.get_or_load(crate::llm::RecipeModel::try_load)
+                {
+                    match model.generate(&analysis) {
                         Some(recipe) => {
                             info!(
                                 "LLM authored recipe \"{}\" for {}",
@@ -694,25 +711,29 @@ impl AnalysisStore {
                             a
                         }
                         None => analysis,
-                    },
-                    _ => analysis,
+                    }
+                } else {
+                    analysis
                 };
                 // M7 agent path — the gen-style alternative to the static
                 // recipe. Bonsai calls tools (spawn_primitive, set_light, ...)
                 // to construct the world entity-by-entity, issuing commands
-                // through the globally-installed bridge that the Bevy executor
-                // drains each frame. Skipped when:
-                //   - the bridge isn't installed (feature off / not ready)
+                // through the bridge handed to this worker at construction,
+                // which the Bevy executor drains each frame. Skipped when:
+                //   - no bridge was supplied (feature off / plugin absent)
                 //   - the model is absent
                 //   - a build is already cached (build.is_none() gate) — replay
                 //     handles it instead, no LLM re-run.
                 // The resulting SceneBuild is persisted to the sidecar so the
                 // world is rebuilt deterministically on replay and the command
                 // stream is inspectable for debugging.
+                //
+                // Same tier as the recipe pass above, so whichever runs first
+                // pays the load and the other reuses it.
                 #[cfg(feature = "llm")]
                 let analysis = if analysis.build.is_none()
                     && let Some(bridge) = deps.agent_bridge.clone()
-                    && let Some(model) = recipe_model.as_mut()
+                    && let Some(model) = recipe_model.get_or_load(crate::llm::RecipeModel::try_load)
                 {
                     let m = model.model_mut();
                     match crate::agent::run_session(m, bridge, &analysis) {

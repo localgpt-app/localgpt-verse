@@ -23,6 +23,7 @@ mod recipe;
 mod scope;
 mod settings;
 mod theme;
+mod tier;
 mod world;
 mod world_assets;
 
