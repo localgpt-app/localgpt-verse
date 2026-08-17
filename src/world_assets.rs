@@ -13,7 +13,7 @@ use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 use serde::Deserialize;
 
-use crate::theme::Theme;
+use crate::theme::{Arrangement, Theme};
 
 /// Placement tier — governs instance count, size, and spread.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -190,15 +190,17 @@ pub(crate) fn path_seed(path: &std::path::Path) -> u64 {
         })
 }
 
-/// Per-mood arrangement ("structured layouts" as deterministic rules — the
-/// M7-lite stand-in for full WFC, ARCHITECTURE §3 layer 4): organic spiral
-/// for EMBER/TIDE, a jittered grid for VELVET CIRCUIT (city block), and
-/// concentric rings for GLASS EXPANSE (crystal symmetry). Same (mood, seed)
-/// → same layout.
-fn layout_position(mood: usize, i: usize, rng: &mut u64) -> Vec3 {
+/// Place prop `i` under a world's arrangement ("structured layouts" as
+/// deterministic rules — the M7-lite stand-in for full WFC, ARCHITECTURE §3
+/// layer 4). Same (arrangement, seed) → same layout.
+///
+/// Which arrangement a world uses is [`crate::theme::WorldMood::arrangement`],
+/// not this function's business: keying it on the mood index meant inserting a
+/// mood handed its layout to whatever took that slot.
+fn layout_position(arrangement: Arrangement, i: usize, rng: &mut u64) -> Vec3 {
     let fi = i as f32;
-    match mood {
-        1 => {
+    match arrangement {
+        Arrangement::Grid => {
             // City grid: 7.5m pitch, 10 columns, jittered ±1.8m.
             const PITCH: f32 = 7.5;
             const COLS: usize = 10;
@@ -210,7 +212,7 @@ fn layout_position(mood: usize, i: usize, rng: &mut u64) -> Vec3 {
                 z + (rand01(rng) - 0.5) * 3.6,
             )
         }
-        3 => {
+        Arrangement::Rings => {
             // Rings: 8m inner radius growing 6m per ring, 6+3k seats per ring.
             let mut ring = 0usize;
             let mut first = 0usize; // first index in this ring
@@ -225,7 +227,50 @@ fn layout_position(mood: usize, i: usize, rng: &mut u64) -> Vec3 {
                 + (rand01(rng) - 0.5) * 0.35;
             Vec3::new(ang.cos() * radius, -0.5, ang.sin() * radius)
         }
-        _ => {
+        Arrangement::Clusters => {
+            // Outcrops on open ground: clumps of CLUMP_SIZE around scattered
+            // anchors, so the eye reads groups with empty flats between them
+            // rather than an even field.
+            const CLUMP_SIZE: usize = 4;
+            const CLUMP_SPREAD: f32 = 3.4;
+            // The anchor's own jitter must not depend on how many props landed
+            // before it, so derive it from the clump index alone.
+            let clump = i / CLUMP_SIZE;
+            let mut anchor_rng = (clump as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            let ang = rand01(&mut anchor_rng) * std::f32::consts::TAU;
+            let radius = 11.0 + rand01(&mut anchor_rng) * 26.0;
+            let anchor = Vec3::new(ang.cos() * radius, -0.5, ang.sin() * radius);
+
+            let off = rand01(rng) * std::f32::consts::TAU;
+            let dist = rand01(rng).sqrt() * CLUMP_SPREAD;
+            anchor + Vec3::new(off.cos() * dist, 0.0, off.sin() * dist)
+        }
+        Arrangement::Terraces => {
+            // Tidal terraces: long rows on a slow sine, each row offset so the
+            // bands read as water lines rather than a grid.
+            const ROW_LEN: usize = 7;
+            const ROW_PITCH: f32 = 8.5;
+            const SPAN: f32 = 46.0;
+            let row = i / ROW_LEN;
+            let seat = i % ROW_LEN;
+            let z = row as f32 * ROW_PITCH - 26.0;
+            let t = seat as f32 / (ROW_LEN - 1) as f32;
+            // Stagger alternate rows by half a seat so terraces interlock.
+            let stagger = if row.is_multiple_of(2) {
+                0.0
+            } else {
+                0.5 / ROW_LEN as f32
+            };
+            let x = (t + stagger - 0.5) * SPAN;
+            // The wave gives each row its curve; amplitude grows with distance.
+            let wave = (z * 0.07).sin() * (4.0 + row as f32 * 0.6);
+            Vec3::new(
+                x + (rand01(rng) - 0.5) * 2.2,
+                -0.5,
+                z + wave + (rand01(rng) - 0.5) * 1.4,
+            )
+        }
+        Arrangement::Spiral => {
             // Organic golden-angle spiral (the original arrangement); the
             // centre stays clear — it's the camera's focus and orbit path.
             let ang = fi * 2.399_963 + (rand01(rng) - 0.5) * 0.9;
@@ -333,6 +378,7 @@ pub fn populate_world_props(
     mut last: Local<Option<(usize, u64)>>,
 ) {
     let mood = theme.mood % crate::theme::MOODS.len();
+    let arrangement = crate::theme::MOODS[mood].arrangement;
     if *last == Some((mood, layout.seed)) {
         return;
     }
@@ -378,7 +424,7 @@ pub fn populate_world_props(
         let scale = entry.placement_scale();
         let count = (entry.tier.count() as f32 * density).round().max(1.0) as usize;
         for _ in 0..count {
-            let pos = layout_position(mood, placed, &mut rng);
+            let pos = layout_position(arrangement, placed, &mut rng);
             let scale = scale * (0.85 + rand01(&mut rng) * 0.3);
             let mut e = commands.spawn((
                 WorldProp,
@@ -519,6 +565,7 @@ pub fn stress_spawn(
     };
     stress.spawned = true;
     let mood = theme.mood % crate::theme::MOODS.len();
+    let arrangement = crate::theme::MOODS[mood].arrangement;
     let mood_entries: Vec<_> = manifest
         .assets
         .iter()
@@ -539,7 +586,7 @@ pub fn stress_spawn(
         let entry = entries[i % entries.len()];
         let handle: Handle<_> = asset_server
             .load(GltfAssetLabel::Scene(0).from_asset(format!("models/{}", entry.file)));
-        let pos = layout_position(mood, i, &mut rng);
+        let pos = layout_position(arrangement, i, &mut rng);
         let scale = entry.placement_scale() * (0.85 + rand01(&mut rng) * 0.3);
         let mut e = commands.spawn((
             WorldProp,
@@ -635,24 +682,118 @@ mod tests {
 
     #[test]
     fn layout_styles_are_deterministic_and_distinct() {
-        for mood in 0..4 {
+        for arrangement in ALL_ARRANGEMENTS {
             let (mut a, mut b) = (99u64, 99u64);
             for i in 0..40 {
                 assert_eq!(
-                    layout_position(mood, i, &mut a),
-                    layout_position(mood, i, &mut b)
+                    layout_position(arrangement, i, &mut a),
+                    layout_position(arrangement, i, &mut b)
                 );
             }
         }
-        // Grid (mood 1): positions snap to the 7.5m pitch lattice ±jitter.
+        // Grid: positions snap to the 7.5m pitch lattice ±jitter.
         let mut rng = 5u64;
-        let p = layout_position(1, 23, &mut rng);
+        let p = layout_position(Arrangement::Grid, 23, &mut rng);
         let lattice = |v: f32, off: f32| ((v - off) / 7.5).fract().abs();
         assert!(lattice(p.x, -33.75) < 0.25 || lattice(p.x, -33.75) > 0.75);
-        // Rings (mood 3): radius stays within the ring band.
+        // Rings: radius stays within the ring band.
         let mut rng = 5u64;
-        let p = layout_position(3, 40, &mut rng);
+        let p = layout_position(Arrangement::Rings, 40, &mut rng);
         let r = (p.x * p.x + p.z * p.z).sqrt();
         assert!((7.0..60.0).contains(&r), "ring radius {r}");
+    }
+
+    const ALL_ARRANGEMENTS: [Arrangement; 5] = [
+        Arrangement::Spiral,
+        Arrangement::Grid,
+        Arrangement::Rings,
+        Arrangement::Clusters,
+        Arrangement::Terraces,
+    ];
+
+    /// Average nearest-neighbour distance — a cheap proxy for "does this read
+    /// as clumped or as evenly spread".
+    fn mean_nearest_neighbour(arrangement: Arrangement, n: usize) -> f32 {
+        let mut rng = 7u64;
+        let points: Vec<Vec3> = (0..n)
+            .map(|i| layout_position(arrangement, i, &mut rng))
+            .collect();
+        let total: f32 = points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                points
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .map(|(_, q)| p.distance(*q))
+                    .fold(f32::MAX, f32::min)
+            })
+            .sum();
+        total / n as f32
+    }
+
+    #[test]
+    fn every_built_in_mood_has_its_own_arrangement() {
+        let used: Vec<Arrangement> = crate::theme::MOODS.iter().map(|m| m.arrangement).collect();
+        for (i, a) in used.iter().enumerate() {
+            for (j, b) in used.iter().enumerate() {
+                assert!(
+                    i == j || a != b,
+                    "`{}` and `{}` share the {a:?} arrangement",
+                    crate::theme::MOODS[i].id,
+                    crate::theme::MOODS[j].id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clusters_clump_more_tightly_than_the_spiral() {
+        // The point of Clusters is groups with open ground between them, so
+        // neighbours sit closer than in an evenly-spread layout.
+        let clustered = mean_nearest_neighbour(Arrangement::Clusters, 40);
+        let spread = mean_nearest_neighbour(Arrangement::Spiral, 40);
+        assert!(
+            clustered < spread,
+            "clusters ({clustered}) should be tighter than spiral ({spread})"
+        );
+    }
+
+    #[test]
+    fn terraces_form_distinct_rows() {
+        // Seven props per row, so the first seven share a row band and the
+        // eighth starts the next one.
+        let mut rng = 3u64;
+        let points: Vec<Vec3> = (0..14)
+            .map(|i| layout_position(Arrangement::Terraces, i, &mut rng))
+            .collect();
+        let row0_spread = points[..7].iter().map(|p| p.z).fold(f32::MIN, f32::max)
+            - points[..7].iter().map(|p| p.z).fold(f32::MAX, f32::min);
+        let row_gap = (points[7].z - points[0].z).abs();
+        assert!(
+            row_gap > row0_spread / 2.0,
+            "rows ({row_gap}) are not separated from within-row spread ({row0_spread})"
+        );
+    }
+
+    #[test]
+    fn open_centre_arrangements_keep_the_camera_clear() {
+        // Spiral, Rings, and Clusters treat the centre as the camera's focus
+        // and orbit path. Grid deliberately does not — a city block reads as a
+        // city because you stand inside it — and Terraces runs rows across the
+        // whole span, so neither promises a clear middle.
+        for arrangement in [
+            Arrangement::Spiral,
+            Arrangement::Rings,
+            Arrangement::Clusters,
+        ] {
+            let mut rng = 11u64;
+            let close = (0..60)
+                .map(|i| layout_position(arrangement, i, &mut rng))
+                .filter(|p| (p.x * p.x + p.z * p.z).sqrt() < 3.0)
+                .count();
+            assert_eq!(close, 0, "{arrangement:?} placed props on the camera");
+        }
     }
 }

@@ -192,23 +192,49 @@ pub fn to_48k(samples: Vec<f32>, src_sr: u32) -> Option<Vec<f32>> {
 // ---------------------------------------------------------------------------
 
 struct MoodEmbeds {
-    embeds: Vec<[f32; EMB_DIM]>,
+    /// Each text embedding paired with the mood index it votes for.
+    ///
+    /// The pairing is resolved through the prompt's stable id rather than left
+    /// implicit in row order: the file is generated offline and the mood list
+    /// lives in code, so a reordering would otherwise silently make every
+    /// zero-shot classification name the wrong world.
+    embeds: Vec<(usize, [f32; EMB_DIM])>,
 }
 
 static MOOD_EMBEDS: LazyLock<MoodEmbeds> = LazyLock::new(|| {
     #[derive(serde::Deserialize)]
+    struct Prompt {
+        /// Stable mood id. Absent in files generated before ids existed, which
+        /// then fall back to `mood`.
+        #[serde(default)]
+        id: Option<String>,
+        mood: usize,
+    }
+    #[derive(serde::Deserialize)]
     struct File {
+        prompts: Vec<Prompt>,
         embeddings: Vec<Vec<f32>>,
     }
     let text = include_str!("../assets/ml/mood_text_embeddings.json");
     let parsed: File = serde_json::from_str(text).expect("mood embeddings JSON");
+    assert_eq!(
+        parsed.prompts.len(),
+        parsed.embeddings.len(),
+        "mood_text_embeddings.json: {} prompts but {} embeddings — every \
+         embedding must name the mood it votes for",
+        parsed.prompts.len(),
+        parsed.embeddings.len(),
+    );
     let embeds = parsed
         .embeddings
         .iter()
-        .map(|e| {
+        .zip(&parsed.prompts)
+        .map(|(e, prompt)| {
             let mut v = [0.0f32; EMB_DIM];
             v.copy_from_slice(e);
-            v
+            let mood =
+                crate::theme::resolve_mood(crate::theme::MOODS, prompt.id.as_deref(), prompt.mood);
+            (mood, v)
         })
         .collect();
     MoodEmbeds { embeds }
@@ -220,10 +246,9 @@ pub fn mood_for(embedding: &[f32]) -> usize {
     MOOD_EMBEDS
         .embeds
         .iter()
-        .enumerate()
-        .map(|(i, t)| {
+        .map(|(mood, t)| {
             (
-                i,
+                *mood,
                 embedding
                     .iter()
                     .zip(t.iter())
@@ -232,7 +257,7 @@ pub fn mood_for(embedding: &[f32]) -> usize {
             )
         })
         .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
-        .map(|(i, _)| i)
+        .map(|(mood, _)| mood)
         .unwrap_or(0)
 }
 
@@ -333,6 +358,44 @@ mod tests {
                 v as f32
             })
             .collect()
+    }
+
+    #[test]
+    fn every_mood_gets_exactly_one_text_embedding() {
+        // A zero-shot vote is only meaningful if each world is represented once:
+        // a missing prompt makes a world unreachable, a duplicate biases toward
+        // it. Both are silent without this check.
+        let mut voted: Vec<usize> = MOOD_EMBEDS.embeds.iter().map(|(mood, _)| *mood).collect();
+        voted.sort_unstable();
+        let expected: Vec<usize> = (0..crate::theme::MOODS.len()).collect();
+        assert_eq!(
+            voted, expected,
+            "mood_text_embeddings.json does not cover MOODS one-to-one"
+        );
+    }
+
+    #[test]
+    fn embeddings_pair_with_moods_by_id_not_row_order() {
+        // Each prompt's id is what decides the mood it votes for, so the pairing
+        // has to agree with resolving that id directly.
+        #[derive(serde::Deserialize)]
+        struct Prompt {
+            id: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct File {
+            prompts: Vec<Prompt>,
+        }
+        let parsed: File =
+            serde_json::from_str(include_str!("../assets/ml/mood_text_embeddings.json")).unwrap();
+
+        for (prompt, (mood, _)) in parsed.prompts.iter().zip(&MOOD_EMBEDS.embeds) {
+            assert_eq!(
+                crate::theme::MOODS[*mood].id,
+                prompt.id,
+                "embedding paired with the wrong world"
+            );
+        }
     }
 
     #[test]

@@ -105,6 +105,34 @@ impl Fonts {
 // World moods — the sampled accent + the world's own palette.
 // ---------------------------------------------------------------------------
 
+/// How a world arranges its ground props.
+///
+/// Carried by the mood rather than matched on its index: an arrangement is part
+/// of what a world *is*, and keying it positionally meant inserting a mood
+/// silently handed its layout to whoever took that slot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Arrangement {
+    /// Golden-angle spiral, centre kept clear for the camera's orbit.
+    Spiral,
+    /// Jittered city grid — blocks and streets.
+    Grid,
+    /// Concentric rings; crystal symmetry.
+    Rings,
+    /// Clumps separated by open ground — outcrops on a plain.
+    Clusters,
+    /// Meandering rows following a slow wave — tidal terraces.
+    Terraces,
+}
+
+impl Default for Arrangement {
+    /// [`Arrangement::Spiral`] — the original layout, and what a world gets
+    /// when it does not choose one. None of the built-ins use it any more (each
+    /// has its own), so it is the neutral starting point for a new mood.
+    fn default() -> Self {
+        Self::Spiral
+    }
+}
+
 /// A world's palette. The `accent` is the only value that reaches the chrome;
 /// the rest paints the 3D backdrop so the HUD always overlays a live world.
 #[derive(Clone, Copy)]
@@ -132,6 +160,8 @@ pub struct WorldMood {
     pub ground: Color,
     /// Ambient light tint.
     pub ambient: Color,
+    /// How this world lays out its ground props.
+    pub arrangement: Arrangement,
 }
 
 /// The built-in worlds, mirroring the moods named in the spec mockups
@@ -147,6 +177,7 @@ pub const MOODS: &[WorldMood] = &[
         fog: Color::srgb(0.62, 0.42, 0.40),
         ground: Color::srgb(0.478, 0.310, 0.388),
         ambient: Color::srgb(1.0, 0.80, 0.62),
+        arrangement: Arrangement::Clusters,
     },
     // Neon Surge — cyan over deep indigo/magenta. Accent #62F5FF.
     WorldMood {
@@ -158,6 +189,7 @@ pub const MOODS: &[WorldMood] = &[
         fog: Color::srgb(0.24, 0.10, 0.34),
         ground: Color::srgb(0.051, 0.043, 0.165),
         ambient: Color::srgb(0.42, 0.62, 0.95),
+        arrangement: Arrangement::Grid,
     },
     // Night Bloom — cool aqua. Accent #A8D8DE.
     WorldMood {
@@ -169,6 +201,7 @@ pub const MOODS: &[WorldMood] = &[
         fog: Color::srgb(0.176, 0.416, 0.447),
         ground: Color::srgb(0.071, 0.200, 0.243),
         ambient: Color::srgb(0.55, 0.80, 0.82),
+        arrangement: Arrangement::Terraces,
     },
     // Glass Runner — pale ice over violet. Accent #8EF4FF.
     WorldMood {
@@ -180,6 +213,7 @@ pub const MOODS: &[WorldMood] = &[
         fog: Color::srgb(0.20, 0.16, 0.28),
         ground: Color::srgb(0.086, 0.067, 0.145),
         ambient: Color::srgb(0.62, 0.78, 0.92),
+        arrangement: Arrangement::Rings,
     },
 ];
 
