@@ -16,6 +16,7 @@ mod hud;
 mod llm;
 #[cfg(feature = "ml")]
 mod ml;
+mod mood_pack;
 mod overlays;
 mod playback;
 mod plugins;
@@ -218,6 +219,10 @@ fn main() {
     // something that can be unwound. See `scope`.
     let deps = analysis::WorkerDeps::from_world(app.world());
     analysis::mount_analysis(app.world_mut(), deps);
+
+    // `REVERIE_PACK=1 cargo run` mounts a demo world pack, exercising runtime
+    // mount/withdraw against the live registry. See `mood_pack`.
+    mood_pack::mount_demo_pack_if_requested(app.world_mut());
 
     // `REVERIE_SCOPES=1 cargo run` lists what is mounted and what each unit
     // will unwind, so a registration that fails to dispose is findable.

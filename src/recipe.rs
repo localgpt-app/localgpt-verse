@@ -102,7 +102,7 @@ pub struct WorldRecipe {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Biome {
-    /// Index into [`crate::theme::MOODS`] (0=Ember Flats, 1=Velvet Circuit,
+    /// Index into [`crate::theme::moods()`] (0=Ember Flats, 1=Velvet Circuit,
     /// 2=Tide Gardens, 3=Glass Expanse). The primary biome must equal the
     /// detected mood; secondaries may differ for contrast.
     pub mood: usize,

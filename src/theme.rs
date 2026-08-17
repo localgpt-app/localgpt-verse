@@ -6,6 +6,8 @@
 //! one variable is the per-world `accent`, sampled from whatever world is
 //! playing (see [`WorldMood`]).
 
+use std::sync::RwLock;
+
 use bevy::prelude::*;
 use bevy::text::{FontSize, FontSource};
 
@@ -137,7 +139,7 @@ impl Default for Arrangement {
 /// the rest paints the 3D backdrop so the HUD always overlays a live world.
 #[derive(Clone, Copy)]
 pub struct WorldMood {
-    /// Stable identity, independent of this mood's position in [`MOODS`].
+    /// Stable identity, independent of this mood's position in [`moods()`].
     ///
     /// Everything durable refers to a mood by **this**, not by index: sidecars
     /// persist it, and the asset manifest may carry it (see
@@ -166,7 +168,10 @@ pub struct WorldMood {
 
 /// The built-in worlds, mirroring the moods named in the spec mockups
 /// (Dawn Chorus, Neon Surge, Night Bloom, Glass Runner).
-pub const MOODS: &[WorldMood] = &[
+///
+/// The starting contents of the registry, not the live list — read
+/// [`moods()`] instead, which also sees anything mounted since.
+pub const BUILTIN_MOODS: &[WorldMood] = &[
     // Dawn Chorus — warm ambers. Accent #FFB38A.
     WorldMood {
         id: "ember-flats",
@@ -217,11 +222,94 @@ pub const MOODS: &[WorldMood] = &[
     },
 ];
 
+// ---------------------------------------------------------------------------
+// The mood registry — which worlds are mounted right now
+// ---------------------------------------------------------------------------
+
+/// The mounted worlds.
+///
+/// A locked `&'static [WorldMood]` rather than a Bevy resource because the
+/// consumers are not all in Bevy: the analysis worker is a plain `std::thread`,
+/// and the CLAP mood vote and the LLM prompt builders run inside it. No single
+/// owner can hand the list to all of them, so it is process state by nature.
+///
+/// Holding `&'static` keeps every reader's type unchanged — `Theme::current()`
+/// still returns `&'static WorldMood` — at the cost of leaking the old slice on
+/// each change. Mounting is a user action over a handful of small `Copy`
+/// structs, so the leak is bounded by how many times someone changes their pack
+/// set in one session.
+static REGISTRY: RwLock<&'static [WorldMood]> = RwLock::new(BUILTIN_MOODS);
+
+/// The worlds currently mounted, in registry order.
+///
+/// Positions shift when packs are mounted or unmounted. Anything durable must
+/// refer to a world by [`WorldMood::id`] and go through [`resolve_mood`].
+pub fn moods() -> &'static [WorldMood] {
+    *REGISTRY
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn swap_registry(next: Vec<WorldMood>) {
+    let leaked: &'static [WorldMood] = Box::leak(next.into_boxed_slice());
+    *REGISTRY
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = leaked;
+}
+
+/// Mount a world, appending it to the registry.
+///
+/// Returns `false` and changes nothing when a world with that id is already
+/// mounted — ids are identity, so mounting a duplicate would make
+/// [`resolve_mood`] ambiguous.
+pub fn mount_mood(mood: WorldMood) -> bool {
+    let current = moods();
+    if current.iter().any(|m| m.id == mood.id) {
+        return false;
+    }
+    let mut next = current.to_vec();
+    next.push(mood);
+    swap_registry(next);
+    true
+}
+
+/// Unmount the world with `id`, returning whether it was removed.
+///
+/// Refuses to remove the last mounted world: an empty registry leaves nothing
+/// to render, and every index-based reader would have no valid answer.
+///
+/// This is the *withdrawal* half of unmounting — the world stops being
+/// selectable immediately. Anything already on screen keeps rendering until the
+/// next world change, which is what releases its props. Sidecars pinned to the
+/// removed id fall back through [`resolve_mood`], and remounting makes those
+/// pins resolve again, so the round trip is lossless.
+pub fn unmount_mood(id: &str) -> bool {
+    let current = moods();
+    if current.len() <= 1 || !current.iter().any(|m| m.id == id) {
+        return false;
+    }
+    swap_registry(current.iter().copied().filter(|m| m.id != id).collect());
+    true
+}
+
+/// Serializes tests that mutate the registry.
+///
+/// The registry is process state, and `cargo test` runs tests in parallel in
+/// one process, so a test that mounts a pack would otherwise be visible to
+/// every other test mid-run. Tests that only exercise resolution logic use
+/// [`BUILTIN_MOODS`] directly and need no lock.
+#[cfg(test)]
+pub(crate) fn registry_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Resolve a durable mood reference to a live index into `moods`.
 ///
 /// Callers hold two things: an `id` written by whatever produced the record,
 /// and an `index` that was the only representation before ids existed. The id
-/// wins whenever it matches, which is what lets [`MOODS`] be reordered or
+/// wins whenever it matches, which is what lets [`moods()`] be reordered or
 /// extended without silently repointing every sidecar and manifest entry at a
 /// different world.
 ///
@@ -244,20 +332,20 @@ pub fn resolve_mood(moods: &[WorldMood], id: Option<&str>, index: usize) -> usiz
 
 /// The stable id of the mood at `index`, for writing into a durable record.
 pub fn mood_id(index: usize) -> &'static str {
-    MOODS[index % MOODS.len()].id
+    moods()[index % moods().len()].id
 }
 
 /// The currently playing world's palette, plus a smoothed accent used by the
 /// chrome. Index rotates as tracks change.
 #[derive(Resource, Default)]
 pub struct Theme {
-    /// Index into [`MOODS`].
+    /// Index into [`moods()`].
     pub mood: usize,
 }
 
 impl Theme {
     pub fn current(&self) -> &'static WorldMood {
-        &MOODS[self.mood % MOODS.len()]
+        &moods()[self.mood % moods().len()]
     }
     pub fn accent(&self) -> Color {
         self.current().accent
@@ -272,18 +360,20 @@ mod tests {
     fn default_theme_is_first_mood() {
         let t = Theme::default();
         assert_eq!(t.mood, 0);
-        assert_eq!(t.accent(), MOODS[0].accent);
+        assert_eq!(t.accent(), BUILTIN_MOODS[0].accent);
     }
 
     #[test]
     fn mood_index_wraps() {
-        let t = Theme { mood: MOODS.len() };
-        assert_eq!(t.current().world_name, MOODS[0].world_name);
+        let t = Theme {
+            mood: BUILTIN_MOODS.len(),
+        };
+        assert_eq!(t.current().world_name, BUILTIN_MOODS[0].world_name);
     }
 
     #[test]
     fn mood_ids_are_unique() {
-        let mut ids: Vec<&str> = MOODS.iter().map(|m| m.id).collect();
+        let mut ids: Vec<&str> = BUILTIN_MOODS.iter().map(|m| m.id).collect();
         ids.sort_unstable();
         let count = ids.len();
         ids.dedup();
@@ -294,7 +384,7 @@ mod tests {
     /// resolves to the same world after the list is reordered or extended.
     #[test]
     fn a_stored_id_survives_reordering() {
-        let original = MOODS;
+        let original = BUILTIN_MOODS;
         let mut shuffled: Vec<WorldMood> = original.to_vec();
         shuffled.reverse();
 
@@ -310,10 +400,10 @@ mod tests {
 
     #[test]
     fn a_stored_id_survives_an_insertion() {
-        let mut extended: Vec<WorldMood> = MOODS.to_vec();
+        let mut extended: Vec<WorldMood> = BUILTIN_MOODS.to_vec();
         let newcomer = WorldMood {
             id: "new-world",
-            ..MOODS[0]
+            ..BUILTIN_MOODS[0]
         };
         extended.insert(0, newcomer);
 
@@ -328,15 +418,18 @@ mod tests {
     #[test]
     fn an_absent_id_falls_back_to_the_stored_index() {
         // A sidecar written before ids existed.
-        assert_eq!(resolve_mood(MOODS, None, 2), 2);
-        assert_eq!(resolve_mood(MOODS, None, MOODS.len() + 1), 1);
+        assert_eq!(resolve_mood(BUILTIN_MOODS, None, 2), 2);
+        assert_eq!(
+            resolve_mood(BUILTIN_MOODS, None, BUILTIN_MOODS.len() + 1),
+            1
+        );
     }
 
     #[test]
     fn an_unknown_id_falls_back_rather_than_failing() {
         // A mood that has since been removed: the user loses their pinned look,
         // not their library.
-        let resolved = resolve_mood(MOODS, Some("retired-world"), 2);
+        let resolved = resolve_mood(BUILTIN_MOODS, Some("retired-world"), 2);
         assert_eq!(resolved, 2);
     }
 
@@ -348,8 +441,11 @@ mod tests {
 
     #[test]
     fn mood_id_round_trips_through_resolve() {
-        for index in 0..MOODS.len() {
-            assert_eq!(resolve_mood(MOODS, Some(mood_id(index)), 999), index);
+        for index in 0..BUILTIN_MOODS.len() {
+            assert_eq!(
+                resolve_mood(BUILTIN_MOODS, Some(mood_id(index)), 999),
+                index
+            );
         }
     }
 }

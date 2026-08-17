@@ -143,7 +143,7 @@ fn sidebar(
             filter.is_none(),
             accent,
         );
-        for (i, mood) in theme::MOODS.iter().enumerate() {
+        for (i, mood) in theme::moods().iter().enumerate() {
             let count = playback.queue.iter().filter(|t| t.mood == i).count();
             filter_row(
                 side,
@@ -271,7 +271,7 @@ fn main_panel(
         .collect();
     let total: f32 = rows.iter().map(|(_, t)| t.duration).sum();
     let title = filter.map_or("All music", |w| {
-        theme::MOODS[w % theme::MOODS.len()].world_name
+        theme::moods()[w % theme::moods().len()].world_name
     });
     let first = rows.first().map(|(i, _)| *i);
 
@@ -459,7 +459,7 @@ fn track_row(
             BackgroundColor(base),
         ))
         .with_children(|row| {
-            let world = theme::MOODS[track.mood % theme::MOODS.len()].world_name;
+            let world = theme::moods()[track.mood % theme::moods().len()].world_name;
             col(row, fonts, &num.to_string(), 28.0, theme::text_muted());
             // TITLE (+ artist beneath).
             row.spawn(Node {

@@ -35,7 +35,7 @@ use mistralrs::{GgufModelBuilder, TextMessageRole, TextMessages};
 
 use crate::analysis::TrackAnalysis;
 use crate::recipe::WorldRecipe;
-use crate::theme::MOODS;
+use crate::theme::moods;
 
 /// The loaded LLM, ready to author recipes. `None` from `try_load` when the
 /// model file is missing — the caller keeps the rule-derived recipe.
@@ -170,7 +170,7 @@ fn locate_model() -> Option<(PathBuf, String, String)> {
 /// Kept compact (analysis already carries the hard facts) and explicit about
 /// the mood palette so the model modulates *within* the right world.
 fn build_prompt(analysis: &TrackAnalysis) -> TextMessages {
-    let mood_name = MOODS
+    let mood_name = moods()
         .get(analysis.mood)
         .map(|m| m.world_name)
         .unwrap_or("UNKNOWN");

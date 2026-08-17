@@ -1,7 +1,7 @@
 //! Button actions: the dispatcher broadcasts presses as [`UiAction`]
 //! messages; focused handlers consume them (ARCHITECTURE R3).
 
-use std::sync::{mpsc::Receiver, Mutex};
+use std::sync::{Mutex, mpsc::Receiver};
 
 use bevy::app::AppExit;
 use bevy::prelude::*;
@@ -245,7 +245,7 @@ pub fn world_actions(
             ButtonAction::BuildWorld => {
                 // "same song, a new place" — new palette and a re-rolled
                 // layout seed.
-                theme.mood = (theme.mood + 1) % theme::MOODS.len();
+                theme.mood = (theme.mood + 1) % theme::moods().len();
                 let mut state = layout.seed;
                 crate::world_assets::splitmix(&mut state);
                 layout.seed = state;

@@ -18,7 +18,7 @@ pub struct Track {
     pub album: Option<String>,
     /// Duration in seconds.
     pub duration: f32,
-    /// Index into [`crate::theme::MOODS`] — the world this song imagines.
+    /// Index into [`crate::theme::moods()`] — the world this song imagines.
     pub mood: usize,
     /// Section label shown under the title, e.g. "Cascade Hour · Slow Light".
     pub section: String,

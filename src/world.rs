@@ -239,7 +239,7 @@ pub struct PaletteWash {
 
 impl Default for PaletteWash {
     fn default() -> Self {
-        let p = Palette::of(&crate::theme::MOODS[0]);
+        let p = Palette::of(&crate::theme::moods()[0]);
         Self {
             current: p,
             from: p,
@@ -264,7 +264,7 @@ pub fn palette_wash(
     mut fog_q: Query<&mut DistanceFog>,
     mut clear: ResMut<ClearColor>,
 ) {
-    let mood_idx = theme.mood % crate::theme::MOODS.len();
+    let mood_idx = theme.mood % crate::theme::moods().len();
     if wash.last_mood != Some(mood_idx) {
         wash.last_mood = Some(mood_idx);
         wash.from = wash.current;

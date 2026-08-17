@@ -143,7 +143,7 @@ fn spawn_credits(
                                 let detail = format!(
                                     "{} · {}",
                                     a.tier_label(),
-                                    theme::MOODS[a.mood % theme::MOODS.len()].world_name
+                                    theme::moods()[a.mood % theme::moods().len()].world_name
                                 );
                                 credit_row(
                                     rows, fonts, &a.name, &detail, &a.author, &a.license, accent,

@@ -59,7 +59,7 @@ pub struct TrackAnalysis {
     pub sections: Vec<f32>,
     /// Per-second loudness envelope, normalized 0..1.
     pub energy: Vec<f32>,
-    /// Mood index into [`crate::theme::MOODS`] from the quadrant mapping.
+    /// Mood index into [`crate::theme::moods()`] from the quadrant mapping.
     ///
     /// Kept as the compatibility representation; read through
     /// [`TrackAnalysis::mood_index`], which prefers `mood_id`.
@@ -124,14 +124,14 @@ impl TrackAnalysis {
     /// Use this rather than reading `mood` directly: the raw field is only
     /// meaningful next to the mood list that was live when it was written.
     pub fn mood_index(&self) -> usize {
-        crate::theme::resolve_mood(crate::theme::MOODS, self.mood_id.as_deref(), self.mood)
+        crate::theme::resolve_mood(crate::theme::moods(), self.mood_id.as_deref(), self.mood)
     }
 
     /// The pinned mood as a live index, when "Keep this world" is set.
     pub fn pinned_mood_index(&self) -> Option<usize> {
         let pinned = self.pinned_mood?;
         Some(crate::theme::resolve_mood(
-            crate::theme::MOODS,
+            crate::theme::moods(),
             self.pinned_mood_id.as_deref(),
             pinned,
         ))

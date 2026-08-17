@@ -232,8 +232,11 @@ static MOOD_EMBEDS: LazyLock<MoodEmbeds> = LazyLock::new(|| {
         .map(|(e, prompt)| {
             let mut v = [0.0f32; EMB_DIM];
             v.copy_from_slice(e);
-            let mood =
-                crate::theme::resolve_mood(crate::theme::MOODS, prompt.id.as_deref(), prompt.mood);
+            let mood = crate::theme::resolve_mood(
+                crate::theme::moods(),
+                prompt.id.as_deref(),
+                prompt.mood,
+            );
             (mood, v)
         })
         .collect();
@@ -367,10 +370,10 @@ mod tests {
         // it. Both are silent without this check.
         let mut voted: Vec<usize> = MOOD_EMBEDS.embeds.iter().map(|(mood, _)| *mood).collect();
         voted.sort_unstable();
-        let expected: Vec<usize> = (0..crate::theme::MOODS.len()).collect();
+        let expected: Vec<usize> = (0..crate::theme::moods().len()).collect();
         assert_eq!(
             voted, expected,
-            "mood_text_embeddings.json does not cover MOODS one-to-one"
+            "mood_text_embeddings.json does not cover moods() one-to-one"
         );
     }
 
@@ -391,7 +394,7 @@ mod tests {
 
         for (prompt, (mood, _)) in parsed.prompts.iter().zip(&MOOD_EMBEDS.embeds) {
             assert_eq!(
-                crate::theme::MOODS[*mood].id,
+                crate::theme::moods()[*mood].id,
                 prompt.id,
                 "embedding paired with the wrong world"
             );
@@ -436,7 +439,7 @@ mod tests {
     #[test]
     fn mood_index_in_range() {
         let emb = vec![0.0f32; EMB_DIM];
-        assert!(mood_for(&emb) < crate::theme::MOODS.len());
+        assert!(mood_for(&emb) < crate::theme::moods().len());
     }
 
     /// Manual real-track check:
@@ -453,7 +456,7 @@ mod tests {
             .expect("analysis failed");
         eprintln!(
             "{path}\n  mood = {} · embedding[..4] = {:?}",
-            crate::theme::MOODS[mood].world_name,
+            crate::theme::moods()[mood].world_name,
             &emb[..4]
         );
     }

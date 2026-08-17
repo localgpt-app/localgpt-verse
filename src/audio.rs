@@ -440,7 +440,7 @@ pub(crate) fn path_mood(path: &Path) -> usize {
     let hash = bytes.iter().fold(0usize, |acc, &b| {
         acc.wrapping_mul(31).wrapping_add(b as usize)
     });
-    hash % crate::theme::MOODS.len()
+    hash % crate::theme::moods().len()
 }
 
 /// Drain the scan channel into the queue. The first batch replaces the demo
@@ -660,7 +660,7 @@ mod tests {
         let p = Path::new("/music/artist/song.flac");
         assert_eq!(path_mood(p), path_mood(p));
         for path in ["/a.mp3", "/b.mp3", "/c/d.flac", "/e/f/g.wav"] {
-            assert!(path_mood(Path::new(path)) < crate::theme::MOODS.len());
+            assert!(path_mood(Path::new(path)) < crate::theme::moods().len());
         }
     }
 

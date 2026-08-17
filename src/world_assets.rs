@@ -77,10 +77,10 @@ pub struct AssetEntry {
     /// glTF path relative to `assets/models/`.
     pub file: String,
     pub tier: Tier,
-    /// Index into [`crate::theme::MOODS`].
+    /// Index into [`crate::theme::moods()`].
     ///
     /// Positional, and written by `fetch_polyhaven.py` in the separate
-    /// `reverie-assets` repo — so reordering [`crate::theme::MOODS`] silently
+    /// `reverie-assets` repo — so reordering [`crate::theme::moods()`] silently
     /// repoints all 52 assets, and nothing in this repo would catch it. Read
     /// through [`AssetEntry::mood_index`], which prefers `mood_id`.
     pub mood: usize,
@@ -113,7 +113,7 @@ fn one() -> f32 {
 impl AssetEntry {
     /// The live mood index, preferring the stable id over the stored position.
     pub fn mood_index(&self) -> usize {
-        crate::theme::resolve_mood(crate::theme::MOODS, self.mood_id.as_deref(), self.mood)
+        crate::theme::resolve_mood(crate::theme::moods(), self.mood_id.as_deref(), self.mood)
     }
 
     /// Human tier name for the Credits row.
@@ -377,8 +377,8 @@ pub fn populate_world_props(
     existing: Query<Entity, With<WorldProp>>,
     mut last: Local<Option<(usize, u64)>>,
 ) {
-    let mood = theme.mood % crate::theme::MOODS.len();
-    let arrangement = crate::theme::MOODS[mood].arrangement;
+    let mood = theme.mood % crate::theme::moods().len();
+    let arrangement = crate::theme::moods()[mood].arrangement;
     if *last == Some((mood, layout.seed)) {
         return;
     }
@@ -493,7 +493,7 @@ pub fn populate_world_props(
     if placed > 0 {
         info!(
             "Placed {placed} props for {} (settle {settle:.2}s, density {density:.2})",
-            crate::theme::MOODS[mood].world_name
+            crate::theme::moods()[mood].world_name
         );
     }
 }
@@ -564,8 +564,8 @@ pub fn stress_spawn(
         return;
     };
     stress.spawned = true;
-    let mood = theme.mood % crate::theme::MOODS.len();
-    let arrangement = crate::theme::MOODS[mood].arrangement;
+    let mood = theme.mood % crate::theme::moods().len();
+    let arrangement = crate::theme::moods()[mood].arrangement;
     let mood_entries: Vec<_> = manifest
         .assets
         .iter()
@@ -735,14 +735,17 @@ mod tests {
 
     #[test]
     fn every_built_in_mood_has_its_own_arrangement() {
-        let used: Vec<Arrangement> = crate::theme::MOODS.iter().map(|m| m.arrangement).collect();
+        let used: Vec<Arrangement> = crate::theme::moods()
+            .iter()
+            .map(|m| m.arrangement)
+            .collect();
         for (i, a) in used.iter().enumerate() {
             for (j, b) in used.iter().enumerate() {
                 assert!(
                     i == j || a != b,
                     "`{}` and `{}` share the {a:?} arrangement",
-                    crate::theme::MOODS[i].id,
-                    crate::theme::MOODS[j].id
+                    crate::theme::moods()[i].id,
+                    crate::theme::moods()[j].id
                 );
             }
         }

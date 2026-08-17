@@ -58,7 +58,7 @@ pub use crate::agent_types::{
 use tokio::sync::{Mutex, mpsc};
 
 use crate::analysis::TrackAnalysis;
-use crate::theme::MOODS;
+use crate::theme::moods;
 
 // ---------------------------------------------------------------------------
 // (SceneBuild + AgentCommand + cmd structs live in crate::agent_types, always
@@ -733,7 +733,7 @@ const MAX_AGENT_STEPS: usize = 12;
 /// The system prompt: tells Bonsai what it is, gives it the track's mood/BPM/
 /// energy as context, and instructs it to build a world with the tools.
 fn build_system_prompt(analysis: &TrackAnalysis) -> String {
-    let mood = MOODS
+    let mood = moods()
         .get(analysis.mood)
         .map(|m| m.world_name)
         .unwrap_or("UNKNOWN");
