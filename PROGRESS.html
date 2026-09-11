@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reverie — LLM Integration Progress</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --card: #12151d;
+    --line: #232836;
+    --text: #e8eaf0;
+    --muted: #9aa1b2;
+    --accent: #e8a06a;
+    --ok: #6fd18a;
+    --warn: #e8c06a;
+    --human: #7fb4e8;
+    --code: #1a1e28;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 -apple-system, "Segoe UI", Roboto, "Hanken Grotesk", sans-serif;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 48px 24px 96px; }
+  h1 { font-size: 26px; font-weight: 600; margin: 0 0 4px; letter-spacing: 0.2px; }
+  h1 .dot { color: var(--accent); }
+  .sub { color: var(--muted); font-size: 13.5px; margin-bottom: 28px; }
+  .sub code { color: var(--accent); }
+  h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 1.6px;
+    color: var(--muted); margin: 40px 0 12px; font-weight: 600;
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .summary { display: flex; gap: 12px; flex-wrap: wrap; }
+  .stat {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 18px; min-width: 120px;
+  }
+  .stat b { font-size: 22px; display: block; }
+  .stat span { color: var(--muted); font-size: 12px; }
+  .stat.ok b { color: var(--ok); }
+  .stat.next b { color: var(--warn); }
+  .stat.human b { color: var(--human); }
+  table { width: 100%; border-collapse: collapse; background: var(--card);
+          border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: 1px;
+       color: var(--muted); padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.pri { white-space: nowrap; font-weight: 600; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 99px; font-size: 11.5px;
+          font-weight: 600; white-space: nowrap; }
+  .pill.done { background: rgba(111,209,138,.14); color: var(--ok); }
+  .pill.p1 { background: rgba(232,160,106,.16); color: var(--accent); }
+  .pill.p2 { background: rgba(232,192,106,.14); color: var(--warn); }
+  .pill.p3 { background: rgba(154,161,178,.14); color: var(--muted); }
+  .pill.human { background: rgba(127,180,232,.15); color: var(--human); }
+  code { font: 12.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+         background: var(--code); padding: 1px 6px; border-radius: 5px; }
+  pre { background: var(--code); border: 1px solid var(--line); border-radius: 10px;
+        padding: 14px 16px; overflow-x: auto; }
+  pre code { background: none; padding: 0; color: #cdd3e0; }
+  .callout { background: rgba(127,180,232,.07); border: 1px solid rgba(127,180,232,.3);
+             border-radius: 10px; padding: 16px 18px; }
+  .callout h3 { margin: 0 0 8px; font-size: 14.5px; color: var(--human); }
+  .callout ol { margin: 0; padding-left: 20px; }
+  .callout li { margin: 7px 0; }
+  ul.clean { list-style: none; padding: 0; margin: 0; }
+  ul.clean li { padding: 9px 0 9px 30px; position: relative; border-bottom: 1px solid var(--line); }
+  ul.clean li:last-child { border-bottom: none; }
+  ul.clean li::before { content: "✓"; position: absolute; left: 4px; color: var(--ok);
+                        font-weight: 700; }
+  ul.clean li b { color: var(--text); }
+  ul.clean li .where { color: var(--muted); font-size: 12.5px; display: block; }
+  .note { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  footer { color: var(--muted); font-size: 12.5px; margin-top: 56px;
+           border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+  <h1><span class="dot">●</span> Reverie — LLM Integration Progress</h1>
+  <p class="sub">Tracking the gap analysis → fix work on the <code>llm</code> tiers (recipe + agent).
+     Last updated <strong>2026-09-11</strong> · baseline commit <code>c27f6d2</code>
+     “feat(reverie): make the LLM tiers load-bearing end to end”</p>
+
+  <div class="summary">
+    <div class="stat ok"><b>5 / 5</b><span>gap items fixed &amp; committed</span></div>
+    <div class="stat next"><b>5</b><span>follow-ups identified</span></div>
+    <div class="stat human"><b>2</b><span>require a human decision</span></div>
+  </div>
+
+  <h2>Shipped — verified compile + tests + smoke</h2>
+  <ul class="clean">
+    <li><b>Recipe text surfaces in the UI.</b> The LLM’s <code>world_name</code> (e.g. “Velvet
+      Megacity Ruins”) replaces the static mood name in the HUD eyebrow and the pause title,
+      capped at 40 chars, falling back to the mood name.
+      <span class="where">src/hud.rs · src/overlays/pause.rs</span></li>
+    <li><b>Full WorldRecipe consumption.</b> Section choreography (role → measured segment via
+      energy curve → energy shift / motion / palette wash), fog density, ambient tint, primary
+      biome tint (≤40% mix), biome layout override, secondary-biome accent props, kind-matched
+      landmarks with emissive beacons, and the recipe seed (pin &gt; recipe &gt; path).
+      <span class="where">src/world.rs · src/world_assets.rs · src/analysis.rs</span></li>
+    <li><b>Agent leak + timing fixes.</b> Lights/environment are name-registered (update in
+      place, despawned with the scene); Comfort gates applied to every emissive/light at
+      execution; every entity is track-scoped and hidden until its track is current, so
+      lookahead sessions never pop into the playing world.
+      <span class="where">src/agent.rs · src/agent_types.rs · src/plugins.rs</span></li>
+    <li><b>The LLM got the asset vocabulary.</b> New <code>place_asset</code> agent tool whose
+      schema enum <em>is</em> the 52-model manifest (read from disk on the worker thread) — the
+      model can now place curated CC0 assets, not just raw primitives. Landmark kinds also match
+      hero assets by name keywords.
+      <span class="where">src/agent.rs · src/world_assets.rs</span></li>
+    <li><b>CI compiles the gated tiers.</b> <code>cargo check --features llm</code> and
+      <code>--features ml</code> added to the reverie job — the LLM code can no longer rot
+      broken while default-feature CI stays green. Docs (README, PLAN, module headers) updated
+      to match reality.
+      <span class="where">.github/workflows/ci.yml · README.md · PLAN.md</span></li>
+  </ul>
+  <p class="note">Gates at the baseline commit: clippy + fmt clean (default <em>and</em> llm
+     features) · 88 tests (default) / 95 (llm) pass · <code>REVERIE_SMOKE=1</code> boots every
+     screen and places props 86 / 79 across a crossfade.</p>
+
+  <h2>Actions that need a human</h2>
+  <div class="callout">
+    <h3>Two decisions only you can make</h3>
+    <ol>
+      <li><b>Runtime verification with a real model.</b> Everything above is verified
+        compile/test/smoke — but <em>without</em> the 3.5&nbsp;GB model, so the mistral.rs
+        tool-calling loop and recipe generation have not been exercised live. Run
+        <code>scripts/fetch-bonsai.sh</code> (bandwidth + disk), then
+        <code>cargo run --features llm</code> and import a folder; watch the logs for
+        <code>llm: recipe for …</code> and <code>agent: session produced …</code>. Or ask
+        Claude to fetch and drive it — the download is the only human-scale resource.</li>
+      <li><b>Model licensing before any distribution.</b> Bonsai GGUF terms and the CLAP
+        weights (CC-BY-NC) must be checked against your distribution model before shipping
+        either tier in a release build. The app runs fully without them (rule-derived path),
+        by design.</li>
+    </ol>
+  </div>
+
+  <h2>Backlog — what to do next</h2>
+  <table>
+    <tr><th></th><th>Item</th><th>Who</th><th>Notes</th></tr>
+    <tr>
+      <td class="pri"><span class="pill p1">P1</span></td>
+      <td><b>Runtime verification of the LLM tiers</b> with the fetched model (see human
+          action 1) — including whether Bonsai-8B 1-bit actually emits valid tool calls, or
+          whether the documented Q4_K_M fallback should become the default.</td>
+      <td><span class="pill human">human or Claude</span></td>
+      <td>Blocks confidence in everything else; the fetch script is resumable.</td>
+    </tr>
+    <tr>
+      <td class="pri"><span class="pill p1">P1</span></td>
+      <td><b>LLM pass timeout / cancellation.</b> <code>AnalysisStore::shutdown</code> still
+          blocks for the rest of the current track’s inference; a cancel flag checked inside
+          <code>run_session</code> bounds it. Also worth measuring against idea.md’s
+          “plan generated &lt; song length” validation threshold.</td>
+      <td><span class="pill p2">Claude</span></td>
+      <td>Pure code; no model needed to implement, only to verify.</td>
+    </tr>
+    <tr>
+      <td class="pri"><span class="pill p2">P2</span></td>
+      <td><b>Embedding-based asset selection.</b> The CLAP 512-d embedding is stored per
+          track but unused; landmarks still match by name keywords. Match
+          landmark/biome intent to asset tags in the shared text space (needs the CLAP text
+          tower; keywords stay the no-model fallback).</td>
+      <td><span class="pill p2">Claude</span></td>
+      <td>Rides the <code>ml</code> feature; PLAN.md M5→M6 hook.</td>
+    </tr>
+    <tr>
+      <td class="pri"><span class="pill p2">P2</span></td>
+      <td><b>Surface the agent’s description + tier status in the UI.</b> The session’s
+          closing description is captured and logged but not shown; the pause overlay or
+          Settings could say which tier authored the world (rules / CLAP / recipe / agent).</td>
+      <td><span class="pill p2">Claude</span></td>
+      <td>Small; pure UI.</td>
+    </tr>
+    <tr>
+      <td class="pri"><span class="pill p3">P3</span></td>
+      <td><b>M7 remainders.</b> Beat This! ONNX beat tracking
+          (<code>beat-this</code> crate, unaudited) and Demucs stem reactivity
+          (model fetched, curves stored, renderer still reads the mixed envelope).</td>
+      <td><span class="pill p3">Claude</span></td>
+      <td>None load-bearing; quality upgrades.</td>
+    </tr>
+  </table>
+
+  <h2>Verify the current state yourself</h2>
+<pre><code>cd apps/reverie
+
+# Lint + tests (default and llm features)
+cargo clippy --tests -- -D warnings
+cargo clippy --tests --features llm -- -D warnings
+cargo test && cargo test --features llm
+
+# The ml tier compiles
+cargo check --features ml
+
+# UI/runtime smoke (boots every screen, exits by itself)
+REVERIE_SMOKE=1 cargo run
+
+# The full LLM path (needs the model — see human action 1)
+scripts/fetch-bonsai.sh
+cargo run --features llm</code></pre>
+
+  <footer>Maintained alongside <code>PLAN.md</code>’s status notes — update this page in the
+     same commit that changes tier status. Open directly in a browser
+     (<code>open apps/reverie/PROGRESS.html</code>); no build step, no dependencies.</footer>
+</main>
+</body>
+</html>
