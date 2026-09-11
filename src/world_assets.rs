@@ -340,19 +340,26 @@ pub(crate) fn asset_root() -> std::path::PathBuf {
     }
 }
 
+/// Read `assets/models/manifest.json` from disk if present. Used both by the
+/// Bevy-side loader ([`load_asset_manifest`]) and by the analysis worker
+/// thread, which needs the asset vocabulary to build the agent's `place_asset`
+/// tool schema but cannot reach the `World` resource.
+pub(crate) fn read_manifest_from_disk() -> Option<AssetManifest> {
+    let path = asset_root().join("models/manifest.json");
+    std::fs::read_to_string(&path).ok().and_then(|text| {
+        match serde_json::from_str::<AssetManifest>(&text) {
+            Ok(m) => Some(m),
+            Err(e) => {
+                warn!("Ignoring asset manifest ({e})");
+                None
+            }
+        }
+    })
+}
+
 /// Load `assets/models/manifest.json` if present. Absent → procedural worlds.
 pub fn load_asset_manifest(mut commands: Commands) {
-    let path = asset_root().join("models/manifest.json");
-    let manifest =
-        std::fs::read_to_string(&path).ok().and_then(|text| {
-            match serde_json::from_str::<AssetManifest>(&text) {
-                Ok(m) => Some(m),
-                Err(e) => {
-                    warn!("Ignoring asset manifest ({e})");
-                    None
-                }
-            }
-        });
+    let manifest = read_manifest_from_disk();
     match &manifest {
         Some(m) => info!("Asset pack: {} models", m.assets.len()),
         None => info!("No asset pack bundled — procedural worlds"),
@@ -373,16 +380,26 @@ pub fn populate_world_props(
     asset_server: Res<AssetServer>,
     analysis: Res<crate::analysis::AnalysisStore>,
     playback: Res<crate::playback::Playback>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
     existing: Query<Entity, With<WorldProp>>,
-    mut last: Local<Option<(usize, u64)>>,
+    mut last: Local<Option<(usize, u64, Option<String>)>>,
 ) {
     let mood = theme.mood % crate::theme::moods().len();
-    let arrangement = crate::theme::moods()[mood].arrangement;
-    if *last == Some((mood, layout.seed)) {
+    let recipe = active_recipe.get();
+    // M7: the recipe's primary biome overrides the mood's default
+    // arrangement; its world name keys layout identity so two recipes over the
+    // same (mood, seed) can still ask for different worlds.
+    let arrangement = recipe
+        .and_then(|r| r.biomes.first())
+        .map(|b| b.layout.arrangement())
+        .unwrap_or(crate::theme::moods()[mood].arrangement);
+    let recipe_key = recipe.map(|r| r.world_name.clone());
+    if *last == Some((mood, layout.seed, recipe_key.clone())) {
         return;
     }
-    *last = Some((mood, layout.seed));
+    *last = Some((mood, layout.seed, recipe_key));
 
     for e in &existing {
         commands.entity(e).despawn();
@@ -403,99 +420,217 @@ pub fn populate_world_props(
 
     // M7: a recipe may scale prop density within [0.3, 2.0] (already clamped).
     // Absent recipe → 1.0 (today's per-tier counts).
-    let density = active_recipe.get().map(|r| r.density).unwrap_or(1.0);
+    let density = recipe.map(|r| r.density).unwrap_or(1.0);
 
+    // Seeded per-mood arrangement: same (mood, seed, recipe) → identical world.
+    let mut rng = layout.seed ^ (mood as u64).wrapping_mul(0x9E37_79B9);
+    let mut plan: Vec<PlannedProp> = Vec::new();
+
+    // Primary mood props, three tiers.
     let entries: Vec<_> = manifest
         .assets
         .iter()
         .filter(|a| a.mood_index() == mood)
         .collect();
-    let total: usize = entries
-        .iter()
-        .map(|e| (e.tier.count() as f32 * density).round().max(1.0) as usize)
-        .sum();
-
-    // Seeded per-mood arrangement: same (mood, seed) → identical world.
-    let mut rng = layout.seed ^ (mood as u64).wrapping_mul(0x9E37_79B9);
-    let mut placed = 0usize;
-    for entry in entries {
-        let handle: Handle<_> = asset_server
-            .load(GltfAssetLabel::Scene(0).from_asset(format!("models/{}", entry.file)));
-        let scale = entry.placement_scale();
+    for entry in &entries {
         let count = (entry.tier.count() as f32 * density).round().max(1.0) as usize;
         for _ in 0..count {
-            let pos = layout_position(arrangement, placed, &mut rng);
-            let scale = scale * (0.85 + rand01(&mut rng) * 0.3);
-            let mut e = commands.spawn((
-                WorldProp,
-                WorldAssetRoot(handle.clone()),
-                Transform::from_translation(pos)
-                    .with_scale(Vec3::splat(scale * 0.01))
-                    .with_rotation(Quat::from_rotation_y(
-                        rand01(&mut rng) * std::f32::consts::TAU,
-                    )),
-                PropRise {
-                    delay: stagger_delay(placed, total, settle),
-                    dur: RISE_SECS,
-                    target: scale,
-                    t: 0.0,
-                },
-            ));
-            if let Some(range) = entry.tier.visibility_range() {
-                e.insert(range);
-            }
-            placed += 1;
+            let i = plan.len();
+            plan.push(PlannedProp {
+                file: entry.file.clone(),
+                pos: layout_position(arrangement, i, &mut rng),
+                rot_y: rand01(&mut rng) * std::f32::consts::TAU,
+                scale: entry.placement_scale() * (0.85 + rand01(&mut rng) * 0.3),
+                range: entry.tier.visibility_range(),
+                beacon: None,
+            });
         }
     }
 
-    // M7: raise hero landmarks from the recipe, if any. Each landmark maps to
-    // the best-matching Hero-tier asset for the current mood, placed at its
-    // anchor (Center/Cardinal/Rim) with the recipe's scale. Empty list = the
-    // drifters carry the scene as before. The kind/anchor enums select layout,
-    // not specific assets (the asset set is mood-filtered, not kind-tagged).
-    if let Some(recipe) = active_recipe.get() {
-        let hero_entries: Vec<_> = manifest
+    // M7 secondary biomes: contrasting accents from each secondary mood's own
+    // set (non-hero tiers), claiming a share of the primary budget scaled by
+    // that biome's density. At most two secondaries, so accents accent rather
+    // than take over.
+    if let Some(recipe) = recipe {
+        let primary = plan.len().max(1);
+        for biome in recipe.biomes.iter().skip(1).take(2) {
+            let bmood = biome.mood % crate::theme::moods().len();
+            let accent_count = (biome.density * primary as f32 * 0.25)
+                .round()
+                .clamp(1.0, 24.0) as usize;
+            let accents: Vec<_> = manifest
+                .assets
+                .iter()
+                .filter(|a| a.mood_index() == bmood && a.tier != Tier::Hero)
+                .collect();
+            if accents.is_empty() {
+                continue;
+            }
+            for k in 0..accent_count {
+                let entry = &accents[k % accents.len()];
+                let i = plan.len();
+                plan.push(PlannedProp {
+                    file: entry.file.clone(),
+                    pos: layout_position(biome.layout.arrangement(), i, &mut rng),
+                    rot_y: rand01(&mut rng) * std::f32::consts::TAU,
+                    scale: entry.placement_scale() * (0.8 + rand01(&mut rng) * 0.3),
+                    range: entry.tier.visibility_range(),
+                    beacon: None,
+                });
+            }
+        }
+    }
+
+    // M7 landmarks: hero assets matched to the recipe's `kind` by name
+    // keywords (see `pick_hero_for_kind`), placed at their anchors. Heroes
+    // stay visible through the fog — they define the skyline — and
+    // `emissive > 0.1` raises a beacon above them (baked glTF materials can't
+    // take a runtime emissive).
+    if let Some(recipe) = recipe {
+        let heroes: Vec<_> = manifest
             .assets
             .iter()
             .filter(|a| a.mood_index() == mood && a.tier == Tier::Hero)
             .collect();
+        let mut used: Vec<String> = Vec::new();
         for (i, landmark) in recipe.landmarks.iter().enumerate() {
-            let Some(entry) = hero_entries.get(i % hero_entries.len()) else {
+            let Some(entry) = pick_hero_for_kind(&heroes, landmark.kind, &mut used) else {
                 break;
             };
-            let handle: Handle<_> = asset_server
-                .load(GltfAssetLabel::Scene(0).from_asset(format!("models/{}", entry.file)));
-            let pos = landmark_anchor(landmark.at, i);
-            let scale = landmark.scale * entry.placement_scale();
-            let mut e = commands.spawn((
-                WorldProp,
-                WorldAssetRoot(handle),
-                Transform::from_translation(pos)
-                    .with_scale(Vec3::splat(scale * 0.01))
-                    .with_rotation(Quat::from_rotation_y(
-                        rand01(&mut rng) * std::f32::consts::TAU,
-                    )),
-                PropRise {
-                    delay: stagger_delay(placed, total + recipe.landmarks.len(), settle),
-                    dur: RISE_SECS,
-                    target: scale,
-                    t: 0.0,
-                },
-            ));
-            // Hero landmarks stay visible through the fog (Tier::Hero range).
-            // Emissive is baked into the asset material; the glow ceiling in
-            // animate_world caps overall brightness (Comfort-gated).
-            let _ = &mut e; // keep the spawn expression uniform
-            placed += 1;
+            plan.push(PlannedProp {
+                file: entry.file.clone(),
+                pos: landmark_anchor(landmark.at, i),
+                rot_y: rand01(&mut rng) * std::f32::consts::TAU,
+                scale: landmark.scale * entry.placement_scale(),
+                range: None,
+                beacon: (landmark.emissive > 0.1).then_some(landmark.emissive),
+            });
         }
     }
 
-    if placed > 0 {
+    // One staggered materialize over the whole plan, so every class of
+    // placement shares the same "settle on the downbeat" window.
+    let total = plan.len();
+    let beacon_mesh = meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap());
+    let accent = theme.current().accent;
+    for (i, p) in plan.into_iter().enumerate() {
+        let handle: Handle<_> =
+            asset_server.load(GltfAssetLabel::Scene(0).from_asset(format!("models/{}", p.file)));
+        let mut e = commands.spawn((
+            WorldProp,
+            WorldAssetRoot(handle),
+            Transform::from_translation(p.pos)
+                .with_scale(Vec3::splat(p.scale * 0.01))
+                .with_rotation(Quat::from_rotation_y(p.rot_y)),
+            PropRise {
+                delay: stagger_delay(i, total, settle),
+                dur: RISE_SECS,
+                target: p.scale,
+                t: 0.0,
+            },
+        ));
+        if let Some(range) = p.range {
+            e.insert(range);
+        }
+        if let Some(emissive) = p.beacon {
+            // A static unlit sphere — glow without a per-landmark light cost,
+            // and Comfort-safe by construction (it never pulses).
+            let radius = (0.22 * p.scale).clamp(0.1, 0.6);
+            let height = (2.6 * p.scale).clamp(2.0, 14.0);
+            commands.spawn((
+                WorldProp,
+                Mesh3d(beacon_mesh.clone()),
+                MeshMaterial3d(materials.add(StandardMaterial {
+                    base_color: accent.with_alpha(0.9),
+                    emissive: LinearRgba::new(
+                        accent.to_linear().red * 1.4 * emissive,
+                        accent.to_linear().green * 1.4 * emissive,
+                        accent.to_linear().blue * 1.4 * emissive,
+                        1.0,
+                    ),
+                    unlit: true,
+                    ..default()
+                })),
+                Transform::from_translation(p.pos + Vec3::new(0.0, height, 0.0))
+                    .with_scale(Vec3::splat(radius)),
+            ));
+        }
+    }
+
+    if total > 0 {
         info!(
-            "Placed {placed} props for {} (settle {settle:.2}s, density {density:.2})",
+            "Placed {total} props for {} (settle {settle:.2}s, density {density:.2})",
             crate::theme::moods()[mood].world_name
         );
     }
+}
+
+/// One planned prop placement — collected first so every class of placement
+/// (mood props, secondary-biome accents, recipe landmarks) shares one
+/// staggered materialize pass and one denominator for the stagger math.
+struct PlannedProp {
+    /// glTF file relative to `assets/models/`.
+    file: String,
+    pos: Vec3,
+    rot_y: f32,
+    /// Target scale (metres-normalized); the entity starts at 1% and rises.
+    scale: f32,
+    range: Option<VisibilityRange>,
+    /// M7 landmark emissive (0..1): beacon strength floated above the prop.
+    /// `None` = no beacon.
+    beacon: Option<f32>,
+}
+
+/// Keyword vocabulary mapping a recipe [`crate::recipe::LandmarkKind`] onto
+/// hero assets by name — the M7-lite stand-in for embedding-based selection
+/// (which wants the CLAP text space). Ties break by manifest order, and every
+/// hero is used once before any repeats (round-robin fallback), so two
+/// "Spire" landmarks don't clone the same model when alternatives exist.
+fn pick_hero_for_kind<'a>(
+    heroes: &[&'a AssetEntry],
+    kind: crate::recipe::LandmarkKind,
+    used: &mut Vec<String>,
+) -> Option<&'a AssetEntry> {
+    use crate::recipe::LandmarkKind;
+    let keywords: &[&str] = match kind {
+        LandmarkKind::Spire => &[
+            "tower",
+            "spire",
+            "monolith",
+            "antenna",
+            "lighthouse",
+            "pillar",
+            "column",
+        ],
+        LandmarkKind::Gateway => &["arch", "gate", "portal", "bridge", "torii", "ruin"],
+        LandmarkKind::Mass => &["rock", "boulder", "cliff", "mesa", "mountain", "reef"],
+        LandmarkKind::Monument => &["crystal", "sculpture", "monument", "statue", "obelisk"],
+    };
+    heroes
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| !used.contains(&e.file))
+        .map(|(i, e)| {
+            let score = e
+                .name
+                .to_lowercase()
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|w| keywords.contains(w))
+                .count();
+            (score, i, *e)
+        })
+        .filter(|(score, _, _)| *score > 0)
+        .max_by_key(|(score, i, _)| score * 1000 - *i)
+        .map(|(_, _, e)| {
+            used.push(e.file.clone());
+            e
+        })
+        // Fallback: unused hero in manifest order (the old round-robin).
+        .or_else(|| {
+            let e = heroes.iter().find(|e| !used.contains(&e.file)).copied()?;
+            used.push(e.file.clone());
+            Some(e)
+        })
 }
 
 /// World position for a landmark anchor. Cardinal rotates around the rim by

@@ -1,9 +1,9 @@
 //! LLM scene-construction agent — a simplified port of `localgpt-gen`'s
 //! tool-calling pattern (PLAN.md M7, `llm` feature).
 //!
-//! Unlike the [`crate::recipe`] path (where Bonsai emits one static JSON
-//! object that the renderer interprets), this module makes Bonsai a true
-//! **agent**: it calls tools — `spawn_primitive`, `set_light`, `scene_info`,
+//! Unlike the [`crate::recipe`] path (where the model emits one static JSON
+//! object that the renderer interprets), this module makes the model a true
+//! **agent**: it calls tools — `spawn_primitive`, `place_asset`, `set_light`,
 //! ... — that actually construct the 3D world entity-by-entity, sees the
 //! results, and iterates. The world is authored by the LLM, not just
 //! parameterized by it.
@@ -13,26 +13,36 @@
 //! ```text
 //! ┌──────────────────────────┐   mpsc channels   ┌─────────────────────┐
 //! │ Agent loop (tokio)       │ ◄────────────────►│ Bevy (main thread)  │
-//! │  - Bonsai via mistral.rs │  AgentCommand ──►  │  - drains each frame│
-//! │  - 6 tool schemas        │  ◄── AgentResponse │  - name registry    │
+//! │  - GGUF via mistral.rs   │  AgentCommand ──►  │  - drains each frame│
+//! │  - 7 tool schemas        │  ◄── AgentResponse │  - name registry    │
 //! │  - executes tool_calls   │                    │  - spawns entities  │
 //! └──────────────────────────┘                    └─────────────────────┘
 //! ```
 //!
-//! Core tools (the simplified set): spawn_primitive, modify_entity,
-//! delete_entity, set_light, set_environment, scene_info.
+//! Core tools: spawn_primitive, place_asset, modify_entity, delete_entity,
+//! set_light, set_environment, scene_info.
+//!
+//! # Track scoping
+//!
+//! The worker analyzes tracks *ahead* of playback, so a live session usually
+//! authors the world of the next track while another song plays. Every
+//! agent-spawned entity therefore carries its track's content-hash id
+//! ([`crate::agent_types::AgentEntity`]) and starts hidden;
+//! [`sync_agent_scene_scope`] reveals (and lights) the current track's scene
+//! and blacks out everyone else's, so a lookahead session never pops into the
+//! world mid-song. When the track becomes current, `replay_cached_build`
+//! rebuilds its cached [`SceneBuild`] deterministically — no LLM re-run.
+//!
+//! # Comfort
+//!
+//! Every emissive/light value the agent authors passes through the Comfort
+//! gates at execution time (reduce-flashing caps emissive strength and light
+//! intensity), the same contract the recipe path has always had.
 //!
 //! # Graceful degradation
 //! No `llm` feature → module not compiled; feature but no model → the agent
 //! returns an empty [`SceneBuild`] and the renderer keeps the rule-derived
 //! world. Same contract as [`crate::ml`] / [`crate::demucs`].
-//!
-//! # Status: scaffolded, not yet load-bearing
-//! The protocol, bridge, executor, and tool schemas are complete and compile,
-//! but the live agent loop (`run_session`) returns `None` until the mistral.rs
-//! tool-calling API is confirmed at runtime AND the bridge is threaded from
-//! `main()` into the analysis worker. Until then, dead-code warnings on the
-//! not-yet-called agent API are expected and allowed.
 
 #![allow(dead_code)]
 #![allow(clippy::needless_pass_by_value)]
@@ -46,10 +56,12 @@ use serde_json::{Value, json};
 // Re-export the always-compiled data types so callers can reach them via
 // `crate::agent::SceneBuild` etc., while the types themselves live in the
 // ungated `agent_types` module (so `TrackAnalysis` can carry them without the
-// `llm` feature).
+// `llm` feature, and `world.rs` can exclude agent-owned entities from its
+// queries in every feature config).
 pub use crate::agent_types::{
-    AgentCommand, AgentResponse, EnvironmentCmd, ModifyEntityCmd, PrimitiveShape, SceneBuild,
-    SetLightCmd, SpawnPrimitiveCmd,
+    AgentAmbient, AgentCommand, AgentEntity, AgentLight, AgentResponse, EnvOverride,
+    EnvironmentCmd, ModifyEntityCmd, PlaceAssetCmd, PrimitiveShape, SceneBuild, SetLightCmd,
+    SpawnPrimitiveCmd,
 };
 
 // The bridge's async channels are tokio mpsc (matches gen's pattern). The
@@ -59,11 +71,7 @@ use tokio::sync::{Mutex, mpsc};
 
 use crate::analysis::TrackAnalysis;
 use crate::theme::moods;
-
-// ---------------------------------------------------------------------------
-// (SceneBuild + AgentCommand + cmd structs live in crate::agent_types, always
-// compiled, re-exported above. The feature-gated runtime begins below.)
-// ---------------------------------------------------------------------------
+use crate::world_assets::AssetManifest;
 
 // ---------------------------------------------------------------------------
 // Bridge — async agent ↔ sync Bevy
@@ -113,12 +121,17 @@ pub fn create_channels() -> (Arc<AgentBridge>, AgentChannels) {
 }
 
 // ---------------------------------------------------------------------------
-// Tool schemas — the LLM-facing JSON-Schema for each of the 6 core tools
+// Tool schemas — the LLM-facing JSON-Schema for each of the 7 core tools
 // ---------------------------------------------------------------------------
 
-/// All 6 core tool definitions, as mistral.rs `Tool`s ready for `set_tools`.
+/// The core tool definitions, as mistral.rs `Tool`s ready for `set_tools`.
 /// Each maps 1:1 to an [`AgentCommand`] variant executed by [`AgentExecutor`].
-pub fn tool_schemas() -> Vec<mistralrs::Tool> {
+///
+/// With a manifest, `place_asset`'s `asset` parameter is an enum of the actual
+/// bundled files — the model literally cannot name an asset that isn't there
+/// (the asset vocabulary idea.md Stage 3 calls for). Without one, the tool is
+/// omitted and the agent builds from primitives only.
+pub fn tool_schemas(manifest: Option<&AssetManifest>) -> Vec<mistralrs::Tool> {
     use mistralrs::{Function, Tool, ToolType};
     /// helper: build a Function from name/description/parameters JSON.
     fn f(name: &str, desc: &str, params: Value) -> Tool {
@@ -131,10 +144,10 @@ pub fn tool_schemas() -> Vec<mistralrs::Tool> {
             },
         }
     }
-    vec![
+    let mut tools = vec![
         f(
             "spawn_primitive",
-            "Spawn a 3D primitive shape (Cuboid/Sphere/Cylinder/Cone/Torus/Plane) with a material and transform. This is how you build the world — call it many times to compose structures.",
+            "Spawn a 3D primitive shape (Cuboid/Sphere/Cylinder/Cone/Torus/Plane) with a material and transform. Use for structures the asset pack lacks; combine several to compose towers, platforms, frames.",
             json!({
                 "type": "object",
                 "properties": {
@@ -174,7 +187,7 @@ pub fn tool_schemas() -> Vec<mistralrs::Tool> {
         ),
         f(
             "set_light",
-            "Add or update a light. Omit direction for a point light; provide it for a directional (sun) light.",
+            "Add or update a named light. Omit direction for a point light; provide it for a directional (sun) light. Reusing a name updates that light instead of adding another.",
             json!({
                 "type": "object",
                 "properties": {
@@ -200,10 +213,44 @@ pub fn tool_schemas() -> Vec<mistralrs::Tool> {
         ),
         f(
             "scene_info",
-            "List all currently-spawned entities and their transforms, so you can review and iterate on the world you are building.",
+            "List all currently-spawned entities and lights, so you can review and iterate on the world you are building.",
             json!({"type":"object","properties":{}}),
         ),
-    ]
+    ];
+    if let Some(manifest) = manifest {
+        let files: Vec<&str> = manifest.assets.iter().map(|a| a.file.as_str()).collect();
+        // The description carries the human-readable names alongside the enum,
+        // so the model can match intent ("a rock arch") to a file.
+        let listed = manifest
+            .assets
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        tools.insert(
+            1,
+            f(
+                "place_asset",
+                &format!(
+                    "Place one of the app's curated CC0 3D assets — real scanned models: {listed}. \
+                     Prefer these for natural landmarks (rocks, crystals, ruins, plants); use \
+                     spawn_primitive only for structures the list lacks."
+                ),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Unique name for this placement (e.g. 'gate_1')"},
+                        "asset": {"type": "string", "enum": files, "description": "Asset file to place"},
+                        "position": {"type": "array", "items": {"type":"number"}, "default": [0,0,0]},
+                        "rotation_degrees": {"type": "array", "items": {"type":"number"}, "default": [0,0,0]},
+                        "scale": {"type": "number", "default": 1.0, "description": "Uniform scale multiplier"}
+                    },
+                    "required": ["name", "asset"]
+                }),
+            ),
+        );
+    }
+    tools
 }
 
 /// Map a tool name + arguments JSON into an [`AgentCommand`]. Returns `None`
@@ -230,6 +277,13 @@ fn parse_tool_call(name: &str, args: &str) -> Option<AgentCommand> {
             metallic: args["metallic"].as_f64().unwrap_or(0.0) as f32,
             roughness: args["roughness"].as_f64().unwrap_or(0.5) as f32,
             emissive: parse_arr4(&args["emissive"]),
+        })),
+        "place_asset" => Some(AgentCommand::PlaceAsset(PlaceAssetCmd {
+            name: args["name"].as_str()?.into(),
+            asset: args["asset"].as_str()?.into(),
+            position: parse_arr3(&args["position"]),
+            rotation_degrees: parse_arr3(&args["rotation_degrees"]),
+            scale: args["scale"].as_f64().unwrap_or(1.0) as f32,
         })),
         "modify_entity" => Some(AgentCommand::ModifyEntity(ModifyEntityCmd {
             name: args["name"].as_str()?.into(),
@@ -317,13 +371,17 @@ fn parse_opt_arr4(v: &Value) -> Option<[f32; 4]> {
 // ---------------------------------------------------------------------------
 
 use bevy::prelude::{
-    Assets, Commands, Component, Entity, Local, Mesh, Query, Res, ResMut, StandardMaterial,
+    AmbientLight, Assets, Color, Commands, DirectionalLight, Entity, Local, Mesh, PointLight,
+    Query, Res, ResMut, StandardMaterial, Visibility, With, Without,
 };
 
-/// Marker for every agent-spawned entity, carrying its stable name.
-#[derive(Component)]
-pub struct AgentEntity {
-    pub name: String,
+/// Everything the executor needs from the app that it cannot own: the asset
+/// server + manifest (for `place_asset`), and the Comfort gates every
+/// emissive/light value must pass.
+pub struct ExecDeps<'a> {
+    pub asset_server: &'a bevy::asset::AssetServer,
+    pub assets: &'a crate::world_assets::WorldAssets,
+    pub comfort: &'a crate::Comfort,
 }
 
 /// Name → Entity registry. Lets modify/delete reference entities by the names
@@ -339,32 +397,70 @@ impl NameRegistry {
     }
 }
 
-/// The Bevy-side resource: the channels to drain + the name registry. Created
-/// once at startup and held for the app's lifetime.
+/// The Bevy-side resource: the channels to drain, the name registries, and the
+/// session's track scope. Created once at startup and held for the app's
+/// lifetime.
 #[derive(bevy::prelude::Resource)]
 pub struct AgentExecutor {
     pub channels: AgentChannels,
     pub registry: NameRegistry,
+    /// Named lights (registry-style, so `set_light` with a used name updates
+    /// instead of stacking — and `clear_scene` can despawn them).
+    lights: HashMap<String, Entity>,
+    /// The single ambient-light entity `set_environment` owns.
+    ambient: Option<Entity>,
+    /// The track-scoped background the environment set, applied via
+    /// [`EnvOverride`] only while its track is current.
+    env: Option<(String, Color)>,
+    /// The content-hash id of the track whose session/replay is executing.
+    /// Every spawned entity is stamped with it (track scoping — module docs).
+    session_track: String,
+}
+
+impl AgentExecutor {
+    /// Build the executor over a drained channel pair (see
+    /// [`create_channels`]). The only constructor: the registries start empty
+    /// and the scope starts unowned.
+    pub fn new(channels: AgentChannels) -> Self {
+        Self {
+            channels,
+            registry: NameRegistry::default(),
+            lights: HashMap::new(),
+            ambient: None,
+            env: None,
+            session_track: String::new(),
+        }
+    }
 }
 
 impl AgentExecutor {
     /// Drain pending commands and execute them against the world. Called once
     /// per frame. Non-blocking (`try_recv`) so an idle agent costs nothing.
+    #[allow(clippy::too_many_arguments)]
     pub fn drain(
         &mut self,
         commands: &mut Commands,
         meshes: &mut ResMut<Assets<Mesh>>,
         materials: &mut ResMut<Assets<StandardMaterial>>,
+        deps: ExecDeps<'_>,
         agent_entities: &Query<&AgentEntity>,
+        lights_q: &Query<Entity, With<AgentLight>>,
+        ambient_q: &Query<Entity, With<AgentAmbient>>,
     ) {
-        // Reconcile the registry against despawned entities (e.g. a mood change
-        // may have cleared agent entities). Cheap: only walks the registry.
+        // Reconcile the registries against despawned entities (e.g. a mood
+        // change may have cleared agent entities). Cheap: walks the registries.
         self.registry
             .map
             .retain(|_, e| agent_entities.get(*e).is_ok());
+        self.lights.retain(|_, e| lights_q.get(*e).is_ok());
+        if let Some(a) = self.ambient
+            && ambient_q.get(a).is_err()
+        {
+            self.ambient = None;
+        }
 
         while let Ok(cmd) = self.channels.cmd_rx.try_recv() {
-            let resp = self.execute(cmd, commands, meshes, materials);
+            let resp = self.execute(cmd, commands, meshes, materials, &deps);
             let _ = self.channels.resp_tx.send(resp);
         }
     }
@@ -375,30 +471,39 @@ impl AgentExecutor {
         commands: &mut Commands,
         meshes: &mut ResMut<Assets<Mesh>>,
         materials: &mut ResMut<Assets<StandardMaterial>>,
+        deps: &ExecDeps<'_>,
     ) -> AgentResponse {
         use bevy::prelude::*;
+        let track = self.session_track.clone();
         match cmd {
+            AgentCommand::BeginSession { track: t } => {
+                self.session_track = t;
+                AgentResponse::SessionBegun
+            }
             AgentCommand::SpawnPrimitive(c) => {
                 if self.registry.contains(&c.name) {
                     return AgentResponse::Error(format!("'{}' already exists", c.name));
+                }
+                // Comfort: reduce-flashing caps emissive strength.
+                let mut emissive = c.emissive;
+                if deps.comfort.reduce_flashing {
+                    for e in &mut emissive {
+                        *e = (*e).clamp(0.0, 0.3);
+                    }
                 }
                 let mesh = build_primitive_mesh(c.shape, &c.dimensions, meshes);
                 let material = materials.add(StandardMaterial {
                     base_color: Color::srgba(c.color[0], c.color[1], c.color[2], c.color[3]),
                     metallic: c.metallic,
                     perceptual_roughness: c.roughness,
-                    emissive: LinearRgba::new(
-                        c.emissive[0],
-                        c.emissive[1],
-                        c.emissive[2],
-                        c.emissive[3],
-                    ),
+                    emissive: LinearRgba::new(emissive[0], emissive[1], emissive[2], emissive[3]),
                     ..default()
                 });
                 let entity = commands
                     .spawn((
                         AgentEntity {
                             name: c.name.clone(),
+                            track: track.clone(),
                         },
                         Name::new(c.name.clone()),
                         Mesh3d(mesh),
@@ -413,10 +518,52 @@ impl AgentExecutor {
                             ),
                             scale: Vec3::from(c.scale),
                         },
+                        // Revealed by `sync_agent_scene_scope` when (and only
+                        // when) this track is the one playing.
+                        Visibility::Hidden,
                     ))
                     .id();
                 self.registry.map.insert(c.name.clone(), entity);
                 AgentResponse::Spawned { name: c.name }
+            }
+            AgentCommand::PlaceAsset(c) => {
+                if self.registry.contains(&c.name) {
+                    return AgentResponse::Error(format!("'{}' already exists", c.name));
+                }
+                let Some(manifest) = &deps.assets.manifest else {
+                    return AgentResponse::Error("no asset pack bundled".into());
+                };
+                let Some(entry) = manifest.assets.iter().find(|a| a.file == c.asset) else {
+                    return AgentResponse::Error(format!(
+                        "unknown asset '{}' (see place_asset's enum)",
+                        c.asset
+                    ));
+                };
+                let handle: Handle<_> = deps.asset_server.load(
+                    bevy::gltf::GltfAssetLabel::Scene(0)
+                        .from_asset(format!("models/{}", entry.file)),
+                );
+                let entity = commands
+                    .spawn((
+                        AgentEntity {
+                            name: c.name.clone(),
+                            track: track.clone(),
+                        },
+                        Name::new(c.name.clone()),
+                        WorldAssetRoot(handle),
+                        Transform::from_translation(Vec3::from(c.position))
+                            .with_rotation(Quat::from_euler(
+                                EulerRot::YXZ,
+                                c.rotation_degrees[1].to_radians(),
+                                c.rotation_degrees[0].to_radians(),
+                                c.rotation_degrees[2].to_radians(),
+                            ))
+                            .with_scale(Vec3::splat(entry.placement_scale() * c.scale.max(0.05))),
+                        Visibility::Hidden,
+                    ))
+                    .id();
+                self.registry.map.insert(c.name.clone(), entity);
+                AgentResponse::AssetPlaced { name: c.name }
             }
             AgentCommand::ModifyEntity(c) => {
                 let Some(&entity) = self.registry.map.get(&c.name) else {
@@ -456,53 +603,158 @@ impl AgentExecutor {
                 }
             }
             AgentCommand::SetLight(c) => {
-                // A directional light if direction is set; else a point light.
-                if let Some(dir) = c.direction {
-                    let dir_v = Vec3::from(dir).normalize_or_zero();
-                    commands.spawn((
-                        DirectionalLight {
-                            color: Color::srgba(c.color[0], c.color[1], c.color[2], c.color[3]),
-                            illuminance: c.intensity,
-                            ..default()
-                        },
-                        Transform::from_xyz(0.0, 10.0, 0.0).looking_to(dir_v, Vec3::Y),
-                    ));
+                // Comfort: reduce-flashing caps light intensity.
+                let intensity = if deps.comfort.reduce_flashing {
+                    c.intensity.clamp(0.0, 4000.0)
                 } else {
-                    commands.spawn((
-                        PointLight {
-                            color: Color::srgba(c.color[0], c.color[1], c.color[2], c.color[3]),
-                            intensity: c.intensity,
-                            ..default()
-                        },
-                        Transform::from_translation(Vec3::from(
-                            c.position.unwrap_or([0.0, 5.0, 0.0]),
-                        )),
-                    ));
+                    c.intensity.clamp(0.0, 1_000_000.0)
+                };
+                if let Some(&entity) = self.lights.get(&c.name) {
+                    // Update the existing light in place (color, intensity,
+                    // transform) — no stacking.
+                    let color = Color::srgba(c.color[0], c.color[1], c.color[2], c.color[3]);
+                    let pos = c.position;
+                    let dir = c.direction;
+                    commands.entity(entity).insert(AgentLight {
+                        name: c.name.clone(),
+                        track: track.clone(),
+                        base_intensity: intensity,
+                    });
+                    commands.entity(entity).queue(move |mut e: EntityWorldMut| {
+                        if let Some(mut l) = e.get_mut::<PointLight>() {
+                            l.color = color;
+                            l.intensity = 0.0; // revealed by sync_agent_scene_scope
+                        }
+                        if let Some(mut l) = e.get_mut::<DirectionalLight>() {
+                            l.color = color;
+                            l.illuminance = 0.0;
+                        }
+                        if let Some(mut tf) = e.get_mut::<Transform>() {
+                            if let Some(p) = pos {
+                                tf.translation = Vec3::from(p);
+                            }
+                            if let Some(d) = dir {
+                                let d = Vec3::from(d).normalize_or_zero();
+                                if d != Vec3::ZERO {
+                                    tf.look_to(d, Vec3::Y);
+                                }
+                            }
+                        }
+                    });
+                    return AgentResponse::LightSet { name: c.name };
                 }
+                // A directional light if direction is set; else a point light.
+                // Spawned dark (intensity 0) — `sync_agent_scene_scope` turns
+                // it on when its track is current.
+                let color = Color::srgba(c.color[0], c.color[1], c.color[2], c.color[3]);
+                let entity = if let Some(dir) = c.direction {
+                    let dir_v = Vec3::from(dir).normalize_or_zero();
+                    commands
+                        .spawn((
+                            AgentLight {
+                                name: c.name.clone(),
+                                track: track.clone(),
+                                base_intensity: intensity,
+                            },
+                            DirectionalLight {
+                                color,
+                                illuminance: 0.0,
+                                ..default()
+                            },
+                            Transform::from_xyz(0.0, 10.0, 0.0).looking_to(dir_v, Vec3::Y),
+                        ))
+                        .id()
+                } else {
+                    commands
+                        .spawn((
+                            AgentLight {
+                                name: c.name.clone(),
+                                track: track.clone(),
+                                base_intensity: intensity,
+                            },
+                            PointLight {
+                                color,
+                                intensity: 0.0,
+                                ..default()
+                            },
+                            Transform::from_translation(Vec3::from(
+                                c.position.unwrap_or([0.0, 5.0, 0.0]),
+                            )),
+                        ))
+                        .id()
+                };
+                self.lights.insert(c.name.clone(), entity);
                 AgentResponse::LightSet { name: c.name }
             }
             AgentCommand::SetEnvironment(c) => {
-                // Background via a ClearColor resource; ambient via AmbientLight
-                // on the camera. We set a global ambient entity (idempotent-ish:
-                // one per call; acceptable for a simplified agent).
-                commands.spawn((bevy::prelude::AmbientLight {
-                    color: Color::srgba(
-                        c.ambient_light[0],
-                        c.ambient_light[1],
-                        c.ambient_light[2],
-                        c.ambient_light[3],
+                // Comfort: reduce-flashing calms the ambient too.
+                let lum = (c.ambient_light[0] * 0.3
+                    + c.ambient_light[1] * 0.5
+                    + c.ambient_light[2] * 0.2)
+                    .clamp(0.0, 1.0);
+                let brightness = 260.0
+                    * lum
+                    * if deps.comfort.reduce_flashing {
+                        0.6
+                    } else {
+                        1.0
+                    };
+                let color = Color::srgba(
+                    c.ambient_light[0],
+                    c.ambient_light[1],
+                    c.ambient_light[2],
+                    c.ambient_light[3],
+                );
+                if let Some(entity) = self.ambient {
+                    // Update the single owned ambient entity in place.
+                    commands.entity(entity).insert(AgentAmbient {
+                        track: track.clone(),
+                        base_brightness: brightness,
+                    });
+                    commands.entity(entity).queue(move |mut e: EntityWorldMut| {
+                        if let Some(mut a) = e.get_mut::<AmbientLight>() {
+                            a.color = color;
+                            a.brightness = 0.0; // revealed by sync_agent_scene_scope
+                        }
+                    });
+                } else {
+                    let entity = commands
+                        .spawn((
+                            AgentAmbient {
+                                track: track.clone(),
+                                base_brightness: brightness,
+                            },
+                            AmbientLight {
+                                color,
+                                brightness: 0.0,
+                                ..default()
+                            },
+                        ))
+                        .id();
+                    self.ambient = Some(entity);
+                }
+                // The background is track-scoped: applied via EnvOverride only
+                // while this track is current (see sync_agent_scene_scope).
+                self.env = Some((
+                    track.clone(),
+                    Color::srgba(
+                        c.background_color[0],
+                        c.background_color[1],
+                        c.background_color[2],
+                        c.background_color[3],
                     ),
-                    brightness: 0.5,
-                    ..default()
-                },));
+                ));
                 AgentResponse::EnvironmentSet
             }
             AgentCommand::SceneInfo => {
-                let mut summary = String::from("Scene:\n");
+                let mut summary = format!("Scene (track {}):\n", self.session_track);
                 for name in self.registry.map.keys() {
                     summary.push_str(&format!("  - {name}\n"));
                 }
-                if self.registry.map.is_empty() {
+                for name in self.lights.keys() {
+                    summary.push_str(&format!("  - light {name}\n"));
+                }
+                if self.registry.map.is_empty() && self.lights.is_empty() {
                     summary.push_str("  (empty)");
                 }
                 AgentResponse::SceneInfo(summary)
@@ -510,35 +762,57 @@ impl AgentExecutor {
         }
     }
 
-    /// Despawn every agent-spawned entity and clear the name registry. Used
-    /// before replaying a cached [`SceneBuild`] so the scene is rebuilt clean
-    /// (spawn rejects duplicate names, so a stale scene would block replay).
-    pub fn clear_scene(&mut self, commands: &mut Commands, agent_entities: &Query<&AgentEntity>) {
+    /// Despawn every agent-spawned entity — primitives, placed assets,
+    /// lights, the ambient — and clear the registries. Used before replaying a
+    /// cached [`SceneBuild`] so the scene is rebuilt clean (spawn rejects
+    /// duplicate names, so a stale scene would block replay).
+    pub fn clear_scene(
+        &mut self,
+        commands: &mut Commands,
+        agent_entities: &Query<&AgentEntity>,
+        lights: &Query<Entity, With<AgentLight>>,
+    ) {
         for &e in self.registry.map.values() {
             if agent_entities.get(e).is_ok() {
                 commands.entity(e).despawn();
             }
         }
+        for e in lights.iter() {
+            commands.entity(e).despawn();
+        }
         self.registry.map.clear();
+        self.lights.clear();
+        if let Some(a) = self.ambient {
+            commands.entity(a).despawn();
+        }
+        self.ambient = None;
+        self.env = None;
     }
 
     /// Replay a cached [`SceneBuild`] — iterate its commands through `execute`
-    /// without the LLM, bridge, or async runtime. Deterministic: the same build
-    /// → the same world. Call [`clear_scene`] first. Returns the count applied.
+    /// without the LLM, bridge, or async runtime. Deterministic: the same
+    /// build → the same world. Call [`clear_scene`] first. Returns the count
+    /// applied.
     pub fn replay(
         &mut self,
         build: &SceneBuild,
+        track: &str,
         commands: &mut Commands,
         meshes: &mut ResMut<Assets<Mesh>>,
         materials: &mut ResMut<Assets<StandardMaterial>>,
+        deps: ExecDeps<'_>,
     ) -> usize {
+        self.session_track = track.to_string();
         let mut n = 0;
         for cmd in &build.commands {
-            // SceneInfo has no effect on replay (it only reports state).
-            if matches!(cmd, AgentCommand::SceneInfo) {
+            // Report-only or session-scoped commands have no effect on replay.
+            if matches!(
+                cmd,
+                AgentCommand::SceneInfo | AgentCommand::BeginSession { .. }
+            ) {
                 continue;
             }
-            self.execute(cmd.clone(), commands, meshes, materials);
+            self.execute(cmd.clone(), commands, meshes, materials, &deps);
             n += 1;
         }
         n
@@ -589,16 +863,91 @@ fn build_primitive_mesh(
     }
 }
 
-/// The frame drain system. Registered in main.rs; runs every frame, costs
+/// The frame drain system. Registered in `plugins.rs`; runs every frame, costs
 /// nothing when the agent is idle.
+#[allow(clippy::too_many_arguments)]
 pub fn drain_agent_commands(
     mut executor: ResMut<AgentExecutor>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<bevy::asset::AssetServer>,
+    assets: Res<crate::world_assets::WorldAssets>,
+    comfort: Res<crate::Comfort>,
     agent_entities: Query<&AgentEntity>,
+    lights: Query<Entity, With<AgentLight>>,
+    ambient: Query<Entity, With<AgentAmbient>>,
 ) {
-    executor.drain(&mut commands, &mut meshes, &mut materials, &agent_entities);
+    executor.drain(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        ExecDeps {
+            asset_server: &asset_server,
+            assets: &assets,
+            comfort: &comfort,
+        },
+        &agent_entities,
+        &lights,
+        &ambient,
+    );
+}
+
+/// Reveal the current track's agent scene and black out everyone else's.
+///
+/// Entities spawned during a lookahead session carry that session's track id
+/// and start hidden/dark; this system flips them on exactly when their track
+/// becomes the playing one, and applies the track-scoped background via
+/// [`EnvOverride`] (which `world.rs`'s palette wash reads). One frame of
+/// latency at worst — it runs every frame after the drain/replay systems.
+pub fn sync_agent_scene_scope(
+    playback: Res<crate::playback::Playback>,
+    executor: Res<AgentExecutor>,
+    mut env_override: ResMut<EnvOverride>,
+    mut meshes_q: Query<(&AgentEntity, &mut Visibility)>,
+    mut point_q: Query<(&AgentLight, &mut PointLight), Without<DirectionalLight>>,
+    mut dir_q: Query<(&AgentLight, &mut DirectionalLight), Without<PointLight>>,
+    mut ambient_q: Query<(&AgentAmbient, &mut AmbientLight)>,
+) {
+    let current = playback
+        .queue
+        .get(playback.current % playback.queue.len().max(1))
+        .and_then(|t| t.id.clone());
+    let is_current = |track: &str| current.as_deref() == Some(track);
+
+    for (agent, mut vis) in &mut meshes_q {
+        *vis = if is_current(&agent.track) {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    for (light, mut l) in &mut point_q {
+        l.intensity = if is_current(&light.track) {
+            light.base_intensity
+        } else {
+            0.0
+        };
+    }
+    for (light, mut l) in &mut dir_q {
+        l.illuminance = if is_current(&light.track) {
+            light.base_intensity
+        } else {
+            0.0
+        };
+    }
+    for (ambient, mut a) in &mut ambient_q {
+        a.brightness = if is_current(&ambient.track) {
+            ambient.base_brightness
+        } else {
+            0.0
+        };
+    }
+    env_override.background = executor
+        .env
+        .as_ref()
+        .filter(|(track, _)| is_current(track))
+        .map(|(_, color)| *color);
 }
 
 /// Replay a cached `SceneBuild` when the current track changes and has a build
@@ -611,9 +960,13 @@ pub fn replay_cached_build(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<bevy::asset::AssetServer>,
+    assets: Res<crate::world_assets::WorldAssets>,
+    comfort: Res<crate::Comfort>,
     analysis: Res<crate::analysis::AnalysisStore>,
     playback: Res<crate::playback::Playback>,
     agent_entities: Query<&AgentEntity>,
+    lights: Query<Entity, With<AgentLight>>,
     mut last: Local<Option<Option<String>>>,
 ) {
     let current_id = playback
@@ -634,20 +987,36 @@ pub fn replay_cached_build(
         // replayed entities stay until the next track with a build clears them.
         return;
     };
-    executor.clear_scene(&mut commands, &agent_entities);
-    let n = executor.replay(build, &mut commands, &mut meshes, &mut materials);
+    executor.clear_scene(&mut commands, &agent_entities, &lights);
+    let n = executor.replay(
+        build,
+        id,
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        ExecDeps {
+            asset_server: &asset_server,
+            assets: &assets,
+            comfort: &comfort,
+        },
+    );
     info!("Replayed {n} cached agent commands for track {id}");
 }
 
 // ---------------------------------------------------------------------------
-// Agent session — runs Bonsai in a tool-calling loop until it stops calling
+// Agent session — runs the model in a tool-calling loop until it stops calling
 // ---------------------------------------------------------------------------
 
-/// Run one agent session: Bonsai gets the track's analysis as context, then
+/// Run one agent session: the model gets the track's analysis as context, then
 /// loops calling tools to build a world, until it emits a message with no
-/// tool_calls (it's done) or the step budget is exhausted. Each tool_call is
-/// parsed into an [`AgentCommand`], sent to Bevy via the bridge, and the result
-/// is fed back. Returns the ordered commands issued (the [`SceneBuild`]).
+/// tool_calls (it's done — that message is captured as the build's
+/// description) or the step budget is exhausted. Each tool_call is parsed into
+/// an [`AgentCommand`], sent to Bevy via the bridge, and the result is fed
+/// back. Returns the ordered commands issued (the [`SceneBuild`]).
+///
+/// `track_id` scopes everything the session spawns to that track (see the
+/// module docs on track scoping); `manifest` supplies the asset vocabulary for
+/// the `place_asset` tool (`None` = primitives only).
 ///
 /// Blocks the calling thread on a dedicated tokio runtime (the analysis worker
 /// is a plain std::thread — no async pollution of the rest of the app).
@@ -655,6 +1024,8 @@ pub fn run_session(
     model: &mut mistralrs::Model,
     bridge: Arc<AgentBridge>,
     analysis: &TrackAnalysis,
+    track_id: &str,
+    manifest: Option<&AssetManifest>,
 ) -> Option<SceneBuild> {
     use mistralrs::{RequestBuilder, TextMessageRole, ToolChoice};
 
@@ -665,12 +1036,22 @@ pub fn run_session(
         .ok()?;
 
     rt.block_on(async move {
-        let tools = tool_schemas();
+        let tools = tool_schemas(manifest);
         let mut build = SceneBuild::default();
 
-        // Seed the conversation with the world-design brief.
+        // Seed the conversation with the world-design brief, scoped to this
+        // track so the executor stamps its entities correctly. Not recorded —
+        // `replay` sets its own scope.
+        bridge
+            .send(AgentCommand::BeginSession {
+                track: track_id.to_string(),
+            })
+            .await;
         let mut messages = RequestBuilder::new()
-            .add_message(TextMessageRole::User, build_system_prompt(analysis))
+            .add_message(
+                TextMessageRole::User,
+                build_system_prompt(analysis, manifest),
+            )
             .set_tools(tools)
             .set_tool_choice(ToolChoice::Auto);
 
@@ -686,7 +1067,9 @@ pub fn run_session(
                 break;
             };
             let Some(tool_calls) = &message.tool_calls else {
-                // No tool calls → the agent is done (it emitted a description).
+                // No tool calls → the agent is done. Its closing description is
+                // part of the build (cached, logged, and there for future UI).
+                build.description = message.content.clone().filter(|s| !s.trim().is_empty());
                 break;
             };
 
@@ -721,18 +1104,27 @@ pub fn run_session(
             warn!("agent: session produced no commands — keeping rule-derived world");
             None
         } else {
-            info!("agent: session produced {} commands", build.commands.len());
+            info!(
+                "agent: session produced {} commands{}",
+                build.commands.len(),
+                build
+                    .description
+                    .as_deref()
+                    .map(|d| format!(" — {d}"))
+                    .unwrap_or_default()
+            );
             Some(build)
         }
     })
 }
 
-/// Cap on agent turns per session — bounds LLM cost on a single track.
-const MAX_AGENT_STEPS: usize = 12;
+/// Cap on agent turns per session — bounds LLM cost on a single track. The
+/// prompt asks for 8–16 structures; 24 turns leaves room for review + revise.
+const MAX_AGENT_STEPS: usize = 24;
 
-/// The system prompt: tells Bonsai what it is, gives it the track's mood/BPM/
-/// energy as context, and instructs it to build a world with the tools.
-fn build_system_prompt(analysis: &TrackAnalysis) -> String {
+/// The system prompt: tells the model what it is, gives it the track's mood/
+/// BPM/energy as context, and instructs it to build a world with the tools.
+fn build_system_prompt(analysis: &TrackAnalysis, manifest: Option<&AssetManifest>) -> String {
     let mood = moods()
         .get(analysis.mood)
         .map(|m| m.world_name)
@@ -742,14 +1134,21 @@ fn build_system_prompt(analysis: &TrackAnalysis) -> String {
     } else {
         "unknown".into()
     };
+    let assets = if manifest.is_some() {
+        "place_asset places curated CC0 models (rocks, crystals, ruins, plants) — prefer them \
+         for natural landmarks; spawn_primitive composes raw shapes for anything the asset \
+         list lacks. "
+    } else {
+        ""
+    };
     format!(
         "You are a 3D world designer for a music visualizer. Build an immersive world that \
-matches this song by calling the spawn_primitive, set_light, and set_environment tools. \
+matches this song by calling the tools. {assets}\
 Call scene_info to review your work and iterate.\n\n\
 Song context: mood = {mood}, tempo = {bpm} BPM, {n} sections.\n\
-Keep it tasteful and performant: 8-25 primitives is plenty. Place a ground plane, \
-a few hero structures, and accent lighting that suits the mood. When you are done, \
-reply with a short description instead of calling more tools.",
+Keep it tasteful and performant: 8-16 structures is plenty. Place a ground plane only if \
+the world feels empty, a few hero structures, and accent lighting that suits the mood. \
+When you are done, reply with a short description of the world instead of calling more tools.",
         n = analysis.sections.len().max(1)
     )
 }
@@ -759,14 +1158,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tool_schemas_are_six_complete_functions() {
-        let schemas = tool_schemas();
-        assert_eq!(schemas.len(), 6, "core simplified toolset");
+    fn tool_schemas_are_complete_functions() {
+        let schemas = tool_schemas(None);
+        assert_eq!(schemas.len(), 6, "core toolset without a manifest");
         for s in &schemas {
             assert!(!s.function.name.is_empty());
             assert!(s.function.description.is_some());
             assert!(s.function.parameters.is_some());
         }
+    }
+
+    #[test]
+    fn place_asset_tool_requires_a_manifest() {
+        let manifest: AssetManifest = serde_json::from_str(
+            r#"{"version":1,"assets":[
+                {"id":"u1","name":"Rock Arch","file":"rock_arch.glb","tier":"hero",
+                 "mood":0,"license":"CC0","author":"a","source":"s"}
+            ]}"#,
+        )
+        .expect("parses");
+        let schemas = tool_schemas(Some(&manifest));
+        assert_eq!(schemas.len(), 7, "place_asset joins with a manifest");
+        let place = schemas.iter().find(|t| t.function.name == "place_asset");
+        assert!(place.is_some(), "place_asset present");
+        let params = place.unwrap().function.parameters.clone().unwrap();
+        let json = serde_json::to_value(&params).unwrap();
+        let allowed = &json["properties"]["asset"]["enum"];
+        assert_eq!(allowed[0].as_str(), Some("rock_arch.glb"));
     }
 
     #[test]
@@ -784,6 +1202,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_call_round_trips_place_asset() {
+        let args = r#"{"name":"gate","asset":"rock_arch.glb","position":[0,0,-6],"scale":1.5}"#;
+        let cmd = parse_tool_call("place_asset", args).expect("parses");
+        match cmd {
+            AgentCommand::PlaceAsset(p) => {
+                assert_eq!(p.asset, "rock_arch.glb");
+                assert_eq!(p.scale, 1.5);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
     fn parse_tool_call_rejects_unknown() {
         assert!(parse_tool_call("nope", "{}").is_none());
     }
@@ -793,6 +1224,10 @@ mod tests {
         assert_eq!(
             AgentResponse::Spawned { name: "x".into() }.to_message(),
             "spawned 'x'"
+        );
+        assert_eq!(
+            AgentResponse::AssetPlaced { name: "y".into() }.to_message(),
+            "placed asset 'y'"
         );
         assert!(
             AgentResponse::Error("bad".into())

@@ -39,6 +39,11 @@ pub struct ActiveRecipe {
     /// The recipe for the track currently playing, already
     /// [`WorldRecipe::clamped`]. `None` = no recipe (use the rule-derived path).
     pub recipe: Option<WorldRecipe>,
+    /// The recipe's [`SectionMoment`]s resolved to measured section indices —
+    /// `(segment index, moment)` pairs, computed by `sync_analysis` (which sees
+    /// the full analysis, not just the recipe). The world's
+    /// `sync_section_moment` system keys off these; empty = no choreography.
+    pub moments: Vec<(usize, SectionMoment)>,
 }
 
 impl ActiveRecipe {
@@ -55,7 +60,7 @@ impl ActiveRecipe {
 #[serde(default)]
 pub struct WorldRecipe {
     /// A free-form name for this world (e.g. "Velvet Megacity Ruins"). Shown in
-    /// the HUD title slot. Capped to ~40 chars by the renderer.
+    /// the HUD title slot (capped to 40 chars there); empty = the mood's name.
     pub world_name: String,
 
     /// One or more zones that compose the world. The first biome's `mood`
@@ -93,7 +98,8 @@ pub struct WorldRecipe {
     pub density: f32,
 
     /// Layout RNG seed. Same recipe + seed → same placement; "Build a different
-    /// world" re-rolls it. Defaults to a per-track seed (see analysis.rs).
+    /// world" re-rolls it. `0` = derive per-track (see `sync_analysis`); a pin
+    /// always wins over the recipe's seed.
     pub seed: u64,
 }
 
@@ -133,6 +139,18 @@ pub enum LayoutStyle {
     /// Concentric rings around the centre. Best for bright / crystalline
     /// moods (Glass Expanse).
     Rings,
+}
+
+impl LayoutStyle {
+    /// The renderer-side arrangement this style maps onto. The recipe's
+    /// primary biome overrides the mood's default arrangement with this.
+    pub fn arrangement(self) -> crate::theme::Arrangement {
+        match self {
+            LayoutStyle::Spiral => crate::theme::Arrangement::Spiral,
+            LayoutStyle::Grid => crate::theme::Arrangement::Grid,
+            LayoutStyle::Rings => crate::theme::Arrangement::Rings,
+        }
+    }
 }
 
 /// A hero landmark raised from the asset set.

@@ -123,11 +123,23 @@ impl Plugin for WorldPlugin {
             .init_resource::<recipe::ActiveRecipe>()
             .init_resource::<world::PaletteWash>()
             .init_resource::<world::HeldRing>()
+            .init_resource::<world::SectionFeel>()
+            // The agent's background override (M7) — always present because
+            // the palette wash reads it in every feature config.
+            .init_resource::<crate::agent_types::EnvOverride>()
             .add_systems(Startup, world::setup_world)
             .add_systems(Update, (crate::ease_world_clock, world::spawn_particles))
-            // The palette wash must write hues before the beat-glow rescale
-            // reads them.
-            .add_systems(Update, (world::palette_wash, world::animate_world).chain())
+            // Choreography first (it may trigger a wash), then the wash writes
+            // hues before the beat-glow rescale reads them.
+            .add_systems(
+                Update,
+                (
+                    world::sync_section_moment,
+                    world::palette_wash,
+                    world::animate_world,
+                )
+                    .chain(),
+            )
             .add_systems(
                 Update,
                 world::sync_held_ring.run_if(in_state(AppState::InWorld)),
@@ -330,7 +342,7 @@ impl Plugin for DiagnosticsPlugin {
 }
 
 /// M7 LLM scene-construction agent. Bevy owns the executor (channels + name
-/// registry); the matching bridge is published as a resource so the analysis
+/// registries); the matching bridge is published as a resource so the analysis
 /// worker can be handed it at construction.
 #[cfg(feature = "llm")]
 struct AgentPlugin;
@@ -340,13 +352,19 @@ impl Plugin for AgentPlugin {
     fn build(&self, app: &mut App) {
         let (bridge, channels) = crate::agent::create_channels();
         app.insert_resource(crate::agent::AgentBridgeHandle(bridge));
-        app.insert_resource(crate::agent::AgentExecutor {
-            channels,
-            registry: crate::agent::NameRegistry::default(),
-        });
-        app.add_systems(Update, crate::agent::drain_agent_commands);
-        // Replay a cached SceneBuild when the current track has one (no LLM
-        // re-run). Runs after drain so live-issued and replayed commands agree.
-        app.add_systems(Update, crate::agent::replay_cached_build);
+        app.insert_resource(crate::agent::AgentExecutor::new(channels));
+        // Ordered: live-issued commands drain first, the cached-build replay
+        // (track change) clears/rebuilds on top, and the scope sync reveals
+        // the current track's scene last — so freshly spawned or replayed
+        // entities are scoped within the same frame.
+        app.add_systems(
+            Update,
+            (
+                crate::agent::drain_agent_commands,
+                crate::agent::replay_cached_build,
+                crate::agent::sync_agent_scene_scope,
+            )
+                .chain(),
+        );
     }
 }

@@ -185,6 +185,28 @@ attribution already wired through the manifest → Credits screen.
 > and is a plausible drop-in, unaudited; WFC is superseded for now by the
 > per-mood layout rules above; LLM recipes need a local server (Ollama) +
 > model pull — none load-bearing.
+>
+> **2026-09 — the LLM half of M7 landed** (behind the `llm` feature, mistral.rs
+> + a local GGUF — the Ollama-server idea was dropped for the embedded route):
+> - **Recipe tier fully consumed:** the `WorldRecipe` the model emits now
+>   drives the renderer end-to-end — `world_name` in the HUD eyebrow and pause
+>   title (recipe.rs's old "shown in the HUD" claim is finally true), per-
+>   section choreography (`section_choreography` → energy shift / motion /
+>   palette wash keyed off the measured boundaries via `resolve_section_moments`),
+>   fog density + ambient tint + primary-biome tint in the palette wash,
+>   biome layout override + secondary-biome accent props in placement,
+>   kind-matched landmarks with emissive beacons, and `seed` (pin > recipe >
+>   path precedence).
+> - **Agent tier made load-bearing:** `place_asset` gives the model the actual
+>   asset vocabulary (the tool's enum *is* the manifest, read from disk on the
+>   worker thread); lights/environment are name-registered (update-in-place,
+>   despawned with the scene — no more leaks); every emissive/light passes the
+>   Comfort gates at execution; entities are **track-scoped** (a lookahead
+>   session's scene stays hidden until its track is current, so nothing pops
+>   into the playing world); the session's closing description is captured in
+>   the cached `SceneBuild` and logged. Step budget 12 → 24.
+> - **CI now compiles both gated tiers** (`cargo check --features llm` / `ml`
+>   in the reverie job) — the default-feature gate alone let them rot.
 
 
 **M1 — Real playback core.**

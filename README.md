@@ -45,6 +45,30 @@ mood from it, upgrading the rule mapper; the embedding is stored in the
 sidecar for future asset selection. Without the feature or the model file the
 rule mapper runs. Note the CLAP weights are CC-BY-NC (see PLAN.md §4).
 
+**LLM worlds (PLAN.md M7, optional):** build with `--features llm` and run
+`scripts/fetch-bonsai.sh` once (~3.5 GB GGUF; any standard Q4_K_M GGUF +
+`tokenizer.json` dropped into `assets/llm/` works too). Two tiers ride it,
+both per-track, both cached in the sidecar so they never re-run:
+
+- **Recipe** — schema-constrained generation of a `WorldRecipe` (world name,
+  biomes, landmarks, atmosphere, per-section choreography, particles) that
+  modulates the world *within* the detected mood. The recipe's world name
+  replaces the mood name in the HUD's now-playing eyebrow and the pause title;
+  choreography shifts energy/motion per song section (with optional palette
+  washes); landmarks raise kind-matched hero assets with emissive beacons;
+  secondary biomes mix in contrasting accent props.
+- **Agent** — a tool-calling session that builds a scene entity-by-entity:
+  `place_asset` places the curated CC0 models (the tool's enum *is* the
+  manifest, so the model can't name an absent asset), `spawn_primitive`
+  composes raw shapes, plus lights/environment/`scene_info` to review and
+  iterate. Its `SceneBuild` replays deterministically on every revisit, and
+  entities are scoped to their track — a lookahead session never pops into
+  the playing world; its scene reveals when the track becomes current.
+
+Every emissive/light value the agent authors passes the Comfort gates at
+execution time. Without the feature or the model the app keeps the
+rule-derived world verbatim (CI compiles both tiers so they can't rot).
+
 **Asset pack:** 52 CC0 Poly Haven models (~13 per mood) live in the separate
 `reverie-assets` repo (`fetch_polyhaven.py` downloads + writes the manifest;
 `normalize.py` packs each model to a single uncompressed `.glb` — bevy_gltf
@@ -102,8 +126,8 @@ current world's palette.
   restarts the playing track.
 
 Not yet built (follow-ups): the non-Comfort settings groups (display-only for
-now); the M7 tier (Beat This!/WFC/LLM/Demucs — see [PLAN.md](PLAN.md) for the
-status of each).
+now); Beat This! beat tracking and Demucs-driven stem reactivity (the M7
+remainders — see [PLAN.md](PLAN.md) for the status of each).
 
 ## Fonts
 

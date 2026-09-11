@@ -769,10 +769,11 @@ impl AnalysisStore {
                     analysis
                 };
                 // M7 agent path — the gen-style alternative to the static
-                // recipe. Bonsai calls tools (spawn_primitive, set_light, ...)
-                // to construct the world entity-by-entity, issuing commands
-                // through the bridge handed to this worker at construction,
-                // which the Bevy executor drains each frame. Skipped when:
+                // recipe. The model calls tools (spawn_primitive, place_asset,
+                // set_light, ...) to construct the world entity-by-entity,
+                // issuing commands through the bridge handed to this worker at
+                // construction, which the Bevy executor drains each frame.
+                // Skipped when:
                 //   - no bridge was supplied (feature off / plugin absent)
                 //   - the model is absent
                 //   - a build is already cached (build.is_none() gate) — replay
@@ -782,17 +783,24 @@ impl AnalysisStore {
                 // stream is inspectable for debugging.
                 //
                 // Same tier as the recipe pass above, so whichever runs first
-                // pays the load and the other reuses it.
+                // pays the load and the other reuses it. The manifest is read
+                // from disk (the worker can't reach the Bevy-side resource) so
+                // the agent's `place_asset` tool carries the real asset
+                // vocabulary; absent manifest → primitives only.
                 #[cfg(feature = "llm")]
                 let analysis = if analysis.build.is_none()
                     && let Some(bridge) = deps.agent_bridge.clone()
                     && let Some(model) = recipe_model.get_or_load(crate::llm::RecipeModel::try_load)
                 {
                     let m = model.model_mut();
-                    match crate::agent::run_session(m, bridge, &analysis) {
+                    let manifest = crate::world_assets::read_manifest_from_disk();
+                    match crate::agent::run_session(m, bridge, &analysis, &id, manifest.as_ref()) {
                         Some(build) => {
+                            if let Some(d) = &build.description {
+                                info!("Agent described its world for {}: {d}", path.display());
+                            }
                             info!(
-                                "Agent built {} primitives for {}",
+                                "Agent built {} commands for {}",
                                 build.commands.len(),
                                 path.display()
                             );
@@ -974,8 +982,9 @@ pub fn sync_analysis(
     }
     *applied = Some((current_id.clone(), has));
 
-    // Per-track layout seed: the pin wins, else a deterministic default from
-    // the path (same song → same place until re-rolled).
+    // Per-track layout seed: the pin wins, else the recipe's authored seed
+    // (M7, when non-zero), else a deterministic default from the path (same
+    // song → same place until re-rolled).
     match current_id.as_ref().and_then(|id| store.map.get(id)) {
         Some(a) => {
             playback.sections = a.sections.clone();
@@ -989,12 +998,15 @@ pub fn sync_analysis(
             let mood = a.pinned_mood_index().unwrap_or_else(|| a.mood_index());
             layout.seed = a
                 .pinned_seed
+                .or_else(|| a.recipe.as_ref().filter(|r| r.seed != 0).map(|r| r.seed))
                 .unwrap_or_else(|| crate::world_assets::path_seed(current_path.as_ref().unwrap()));
             playback.queue[idx].mood = mood;
             theme.mood = mood;
             // M7: push the track's recipe (if any) to the live resource the
             // renderer reads. A pinned seed overrides the recipe's seed so
             // "Keep this world" stays deterministic even with an LLM recipe.
+            // The choreography is resolved against this analysis' measured
+            // sections/energy here — the renderer only sees indices.
             active_recipe.recipe = a.recipe.as_ref().map(|r| {
                 let mut r = r.clone();
                 if let Some(seed) = a.pinned_seed {
@@ -1002,6 +1014,11 @@ pub fn sync_analysis(
                 }
                 r
             });
+            active_recipe.moments = a
+                .recipe
+                .as_ref()
+                .map(|r| resolve_section_moments(a, &r.section_choreography))
+                .unwrap_or_default();
         }
         None => {
             // Demo track (no path) keeps its authored mock sections; a real
@@ -1012,13 +1029,85 @@ pub fn sync_analysis(
             }
             beat.grid = false;
             active_recipe.recipe = None;
+            active_recipe.moments.clear();
         }
+    }
+}
+
+/// Resolve the recipe's section choreography onto measured segment indices
+/// (0-based, aligned with the boundaries in `TrackAnalysis::sections` — see
+/// `world::sync_section_moment` for the segmentation). Positional heuristics
+/// anchored by the energy curve: intro/outro take the ends, chorus/drop claim
+/// the loudest remaining segments, verse the quietest, bridge the middle of
+/// what's left. Each segment hosts at most one moment, so a role never
+/// silently overwrites another.
+fn resolve_section_moments(
+    analysis: &TrackAnalysis,
+    choreography: &[crate::recipe::SectionMoment],
+) -> Vec<(usize, crate::recipe::SectionMoment)> {
+    use crate::recipe::SectionRole as R;
+    let n = analysis.sections.len().max(1);
+    let energy: Vec<f32> = (0..n).map(|i| segment_energy(analysis, i)).collect();
+
+    let mut taken: Vec<usize> = Vec::new();
+    let mut out = Vec::new();
+    for m in choreography {
+        let remaining: Vec<usize> = (0..n).filter(|i| !taken.contains(i)).collect();
+        let Some(&first_free) = remaining.first() else {
+            break; // more moments than segments — the rest have nowhere to land
+        };
+        let idx = match m.at_role {
+            R::Intro => 0,
+            R::Outro => n - 1,
+            R::Chorus | R::Drop => remaining
+                .iter()
+                .max_by(|a, b| energy[**a].total_cmp(&energy[**b]))
+                .copied()
+                .unwrap_or(first_free),
+            R::Verse => remaining
+                .iter()
+                .min_by(|a, b| energy[**a].total_cmp(&energy[**b]))
+                .copied()
+                .unwrap_or(first_free),
+            R::Bridge => remaining[remaining.len() / 2],
+        };
+        taken.push(idx);
+        out.push((idx, m.clone()));
+    }
+    out
+}
+
+/// Mean energy of segment `i` (the fraction window between boundary `i` and
+/// `i+1`), from the per-second energy curve. 0.0 when the curve is empty.
+fn segment_energy(analysis: &TrackAnalysis, i: usize) -> f32 {
+    let e = &analysis.energy;
+    if e.is_empty() {
+        return 0.0;
+    }
+    let dur = analysis.duration.max(1.0);
+    let start_frac = analysis.sections.get(i).copied().unwrap_or(0.0);
+    let end_frac = analysis
+        .sections
+        .get(i + 1)
+        .copied()
+        .unwrap_or(1.0)
+        .max(start_frac);
+    let start = start_frac * dur;
+    let end = end_frac * dur;
+    let s0 = (start.floor() as usize).min(e.len() - 1);
+    let s1 = ((end.ceil() as usize).max(s0 + 1)).min(e.len());
+    let slice = &e[s0..s1];
+    if slice.is_empty() {
+        0.0
+    } else {
+        slice.iter().sum::<f32>() / slice.len() as f32
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recipe::{SectionMoment, SectionRole};
 
     /// Synthetic novelty with impulses every `period` frames.
     fn click_novelty(period: usize, phase: usize, len: usize) -> Vec<f32> {
@@ -1064,6 +1153,100 @@ mod tests {
         assert_eq!(map_mood(150.0, 0.8, 500.0), 0); //  driving + dark
         assert_eq!(map_mood(70.0, 0.1, 4000.0), 3); //  calm + bright
         assert_eq!(map_mood(70.0, 0.1, 500.0), 2); //   calm + dark
+    }
+
+    fn moment(role: SectionRole) -> SectionMoment {
+        SectionMoment {
+            at_role: role,
+            ..Default::default()
+        }
+    }
+
+    fn choreo_analysis() -> TrackAnalysis {
+        // 40 s, 4 segments (0.0/0.25/0.5/0.75): quiet, loud, quiet, mid.
+        TrackAnalysis {
+            version: SIDECAR_VERSION,
+            duration: 40.0,
+            bpm: 120.0,
+            beat_offset: 0.0,
+            sections: vec![0.0, 0.25, 0.5, 0.75],
+            energy: {
+                let mut e = vec![0.1; 10]; // 0–10 s: quiet intro
+                e.extend(vec![0.9; 10]); //  10–20 s: loud
+                e.extend(vec![0.2; 10]); //  20–30 s: quiet
+                e.extend(vec![0.5; 10]); //  30–40 s: mid
+                e
+            },
+            mood: 0,
+            mood_id: None,
+            loudness_lufs: None,
+            pinned_mood: None,
+            pinned_mood_id: None,
+            pinned_seed: None,
+            embedding: None,
+            stems: None,
+            recipe: None,
+            build: None,
+        }
+    }
+
+    #[test]
+    fn chorus_lands_on_the_loudest_segment() {
+        let a = choreo_analysis();
+        let out = resolve_section_moments(&a, &[moment(SectionRole::Chorus)]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, 1, "segment 1 (10–20 s) is the loudest");
+    }
+
+    #[test]
+    fn intro_outro_take_the_ends_and_never_collide() {
+        let a = choreo_analysis();
+        let out = resolve_section_moments(
+            &a,
+            &[moment(SectionRole::Intro), moment(SectionRole::Outro)],
+        );
+        assert_eq!(out[0].0, 0);
+        assert_eq!(out[1].0, 3);
+    }
+
+    #[test]
+    fn verse_and_drop_split_quiet_and_loud() {
+        let a = choreo_analysis();
+        let out =
+            resolve_section_moments(&a, &[moment(SectionRole::Drop), moment(SectionRole::Verse)]);
+        assert_eq!(out[0].0, 1, "drop → loudest remaining (segment 1)");
+        assert_eq!(out[1].0, 0, "verse → quietest remaining (segment 0)");
+    }
+
+    #[test]
+    fn more_moments_than_segments_stop_cleanly() {
+        let a = choreo_analysis();
+        let roles = [
+            SectionRole::Intro,
+            SectionRole::Chorus,
+            SectionRole::Verse,
+            SectionRole::Bridge,
+            SectionRole::Outro,
+        ];
+        let out =
+            resolve_section_moments(&a, &roles.iter().map(|r| moment(*r)).collect::<Vec<_>>());
+        assert_eq!(out.len(), 4, "one moment per segment, no duplicates");
+        let mut idxs: Vec<usize> = out.iter().map(|(i, _)| *i).collect();
+        idxs.sort_unstable();
+        idxs.dedup();
+        assert_eq!(idxs.len(), out.len(), "no two moments share a segment");
+    }
+
+    #[test]
+    fn empty_sections_collapse_to_one_segment() {
+        let mut a = choreo_analysis();
+        a.sections = vec![0.0];
+        let out = resolve_section_moments(
+            &a,
+            &[moment(SectionRole::Intro), moment(SectionRole::Chorus)],
+        );
+        assert_eq!(out.len(), 1, "second moment has nowhere to land");
+        assert_eq!(out[0].0, 0);
     }
 
     #[test]

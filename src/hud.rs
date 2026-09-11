@@ -216,9 +216,11 @@ pub fn setup_hud(
     fonts: Res<Fonts>,
     theme: Res<Theme>,
     playback: Res<Playback>,
+    active_recipe: Res<crate::recipe::ActiveRecipe>,
 ) {
     let accent = theme.accent();
     let track = playback.track();
+    let world_name = world_label(&theme, active_recipe.get());
 
     commands
         .spawn((
@@ -292,7 +294,7 @@ pub fn setup_hud(
                     ));
                     row.spawn((
                         WorldNameText,
-                        Text::new(theme.current().world_name),
+                        Text::new(world_name),
                         text_font(fonts.ui_semibold.clone(), 11.5),
                         TextColor(theme::text_muted()),
                         Fade {
@@ -1176,6 +1178,28 @@ pub fn update_hud_accent(theme: Res<Theme>, mut q: Query<&mut Fade, With<AccentT
     }
 }
 
+/// The eyebrow label for the now-playing cluster: the LLM recipe's world name
+/// when it authored one (M7 — the one piece of the recipe's free text the
+/// user sees), capped at 40 chars; else the mood's name.
+fn world_label(theme: &Theme, recipe: Option<&crate::recipe::WorldRecipe>) -> String {
+    match recipe
+        .map(|r| r.world_name.trim())
+        .filter(|n| !n.is_empty())
+    {
+        Some(name) => char_cap(name, 40),
+        None => theme.current().world_name.to_string(),
+    }
+}
+
+/// Truncate to at most `max` chars on a char (not byte) boundary.
+fn char_cap(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let capped: String = s.chars().take(max.saturating_sub(1)).collect();
+    format!("{capped}…")
+}
+
 /// Sync dynamic text + progress geometry to the transport.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn update_hud_content(
@@ -1183,6 +1207,7 @@ pub fn update_hud_content(
     beat: Res<Beat>,
     comfort: Res<Comfort>,
     theme: Res<Theme>,
+    active_recipe: Res<crate::recipe::ActiveRecipe>,
     mut sets: ParamSet<(
         Query<&mut Text, With<WorldNameText>>,
         Query<&mut Text, With<TrackTitleText>>,
@@ -1211,7 +1236,7 @@ pub fn update_hud_content(
 ) {
     let track = playback.track();
     if let Ok(mut t) = sets.p0().single_mut() {
-        *t = Text::new(theme.current().world_name);
+        *t = Text::new(world_label(&theme, active_recipe.get()));
     }
     if let Ok(mut t) = sets.p1().single_mut() {
         *t = Text::new(track.title.clone());

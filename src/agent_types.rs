@@ -8,6 +8,11 @@
 //! load, the renderer can replay a cached build without the LLM, and the JSON
 //! is human-inspectable for debugging.
 //!
+//! The marker components ([`AgentEntity`], [`AgentLight`], [`AgentAmbient`])
+//! and the [`EnvOverride`] resource live here for the same reason: ungated
+//! code (`world.rs`) must be able to exclude agent-owned entities from its
+//! queries even in builds that never spawn them.
+//!
 //! The feature-gated runtime (mistral.rs tool-calling loop, tokio bridge, the
 //! Bevy executor) lives in [`crate::agent`].
 
@@ -19,6 +24,7 @@
 
 use std::collections::HashMap;
 
+use bevy::prelude::{Color, Component, Resource};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -33,6 +39,11 @@ pub struct SceneBuild {
     /// The ordered commands the agent issued (spawn/modify/...). The renderer
     /// replays these to reconstruct the world deterministically.
     pub commands: Vec<AgentCommand>,
+    /// The agent's closing description of the world (its final no-tool-call
+    /// message), cached for logging/debugging and future UI surfacing.
+    /// `None` when the session ended without one (budget exhausted).
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 impl SceneBuild {
@@ -40,6 +51,50 @@ impl SceneBuild {
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Track scoping — agent entities belong to the track they were authored for
+// ---------------------------------------------------------------------------
+
+/// Marker for every agent-spawned entity, carrying its stable name and the
+/// content-hash id of the track whose session spawned it. Entities spawned
+/// while a *lookahead* track is being analyzed start hidden and are revealed
+/// only when their track becomes current (`sync_agent_scene_scope`), so an
+/// ahead-of-playback agent session never pops into the world mid-song.
+#[derive(Component)]
+pub struct AgentEntity {
+    pub name: String,
+    pub track: String,
+}
+
+/// Marker for an agent-owned light, with its authored intensity so it can be
+/// zeroed while its track is not current and restored when it is.
+#[derive(Component)]
+pub struct AgentLight {
+    pub name: String,
+    pub track: String,
+    /// The pre-Comfort, pre-scope intensity (`illuminance` for directional).
+    pub base_intensity: f32,
+}
+
+/// Marker for the agent's single ambient-light entity (spawned once by
+/// `set_environment`, updated by later calls). Excluded from `world.rs`'s
+/// palette wash, which owns the world's own ambient.
+#[derive(Component)]
+pub struct AgentAmbient {
+    pub track: String,
+    /// The authored brightness, zeroed while the track is not current.
+    pub base_brightness: f32,
+}
+
+/// The agent's background-colour override, if its track is current. Written by
+/// the agent executor (via `set_environment`), read by `world.rs`'s palette
+/// wash, which falls back to the mood's sky when `None`. A resource rather
+/// than a direct `ClearColor` write so the two writers never fight.
+#[derive(Resource, Default)]
+pub struct EnvOverride {
+    pub background: Option<Color>,
 }
 
 // ---------------------------------------------------------------------------
@@ -51,9 +106,21 @@ impl SceneBuild {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum AgentCommand {
+    /// Scope everything the session spawns to this track (content-hash id).
+    /// Issued once at session start by `run_session`; never recorded in a
+    /// [`SceneBuild`] (replay sets its own scope) and never model-facing.
+    BeginSession {
+        track: String,
+    },
     SpawnPrimitive(SpawnPrimitiveCmd),
+    /// Place one of the curated CC0 assets from the world manifest (see
+    /// `place_asset` in the agent toolset) — the asset-vocabulary sibling of
+    /// `spawn_primitive`.
+    PlaceAsset(PlaceAssetCmd),
     ModifyEntity(ModifyEntityCmd),
-    DeleteEntity { name: String },
+    DeleteEntity {
+        name: String,
+    },
     SetLight(SetLightCmd),
     SetEnvironment(EnvironmentCmd),
     SceneInfo,
@@ -92,6 +159,23 @@ pub enum PrimitiveShape {
     Plane,
 }
 
+/// Place a curated manifest asset (CC0 glTF) into the world.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaceAssetCmd {
+    pub name: String,
+    /// The manifest entry's `file` (relative to `assets/models/`). The tool
+    /// schema enumerates the valid values, so the model literally cannot name
+    /// an asset that isn't there.
+    pub asset: String,
+    #[serde(default = "zero3")]
+    pub position: [f32; 3],
+    #[serde(default = "zero3")]
+    pub rotation_degrees: [f32; 3],
+    /// Uniform scale multiplier on the asset's normalized placement size.
+    #[serde(default = "one_f")]
+    pub scale: f32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModifyEntityCmd {
     pub name: String,
@@ -127,7 +211,11 @@ pub struct EnvironmentCmd {
 /// Bevy's reply to one command. Serialized to a short string for the LLM.
 #[derive(Debug, Clone)]
 pub enum AgentResponse {
+    SessionBegun,
     Spawned {
+        name: String,
+    },
+    AssetPlaced {
         name: String,
     },
     Modified {
@@ -150,7 +238,9 @@ impl AgentResponse {
     /// The human/LLM-readable result string.
     pub fn to_message(&self) -> String {
         match self {
+            Self::SessionBegun => "session begun".into(),
             Self::Spawned { name } => format!("spawned '{name}'"),
+            Self::AssetPlaced { name } => format!("placed asset '{name}'"),
             Self::Modified { name } => format!("modified '{name}'"),
             Self::Deleted { name } => format!("deleted '{name}'"),
             Self::LightSet { name } => format!("light '{name}' set"),
@@ -190,6 +280,9 @@ fn default_roughness() -> f32 {
 fn default_intensity() -> f32 {
     1000.0
 }
+fn one_f() -> f32 {
+    1.0
+}
 
 #[cfg(test)]
 mod tests {
@@ -214,6 +307,7 @@ mod tests {
                 roughness: 0.4,
                 emissive: [0.0, 0.0, 0.0, 0.0],
             })],
+            description: Some("a jagged neon skyline".into()),
         };
         let json = serde_json::to_string(&b).unwrap();
         let back: SceneBuild = serde_json::from_str(&json).unwrap();
@@ -227,5 +321,31 @@ mod tests {
         assert!(b.is_empty());
         let json = serde_json::to_string(&b).unwrap();
         assert!(json.contains("commands"));
+    }
+
+    #[test]
+    fn place_asset_roundtrip() {
+        let b = SceneBuild {
+            commands: vec![AgentCommand::PlaceAsset(PlaceAssetCmd {
+                name: "gate".into(),
+                asset: "rock_arch.glb".into(),
+                position: [0.0, 0.0, -6.0],
+                rotation_degrees: [0.0, 30.0, 0.0],
+                scale: 1.4,
+            })],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&b).unwrap();
+        let back: SceneBuild = serde_json::from_str(&json).unwrap();
+        match &back.commands[0] {
+            AgentCommand::PlaceAsset(c) => {
+                assert_eq!(c.asset, "rock_arch.glb");
+                assert_eq!(c.scale, 1.4);
+            }
+            _ => panic!("wrong variant"),
+        }
+        // Old sidecars (no description field) still deserialize.
+        let legacy = json.replace(&serde_json::to_string(&b.description).unwrap(), "null");
+        assert!(serde_json::from_str::<SceneBuild>(&legacy).is_ok());
     }
 }

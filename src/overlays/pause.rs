@@ -16,6 +16,7 @@ pub struct PauseRoot;
 #[derive(Component)]
 pub struct IntensityKnob;
 
+#[allow(clippy::too_many_arguments)]
 pub fn sync_pause_overlay(
     paused: Res<Paused>,
     mut commands: Commands,
@@ -23,13 +24,21 @@ pub fn sync_pause_overlay(
     theme: Res<Theme>,
     playback: Res<Playback>,
     intensity: Res<WorldIntensity>,
+    active_recipe: Res<crate::recipe::ActiveRecipe>,
     existing: Query<Entity, With<PauseRoot>>,
 ) {
     if !paused.is_changed() {
         return;
     }
     if paused.0 && existing.is_empty() {
-        spawn_pause(&mut commands, &fonts, &theme, &playback, intensity.0);
+        spawn_pause(
+            &mut commands,
+            &fonts,
+            &theme,
+            &playback,
+            intensity.0,
+            active_recipe.get(),
+        );
     } else if !paused.0 {
         for e in &existing {
             commands.entity(e).despawn();
@@ -43,9 +52,26 @@ fn spawn_pause(
     theme: &Theme,
     playback: &Playback,
     intensity: f32,
+    recipe: Option<&crate::recipe::WorldRecipe>,
 ) {
     let accent = theme.accent();
     let track = playback.track();
+    // The eyebrow names the world: the LLM recipe's authored name when it has
+    // one (capped), else the mood's — same rule as the HUD's now-playing slot.
+    let world_name = match recipe
+        .map(|r| r.world_name.trim())
+        .filter(|n| !n.is_empty())
+    {
+        Some(name) => {
+            let capped: String = name.chars().take(39).collect();
+            if name.chars().count() > 39 {
+                format!("{capped}…")
+            } else {
+                capped
+            }
+        }
+        None => theme.current().world_name.to_string(),
+    };
     commands
         .spawn((
             PauseRoot,
@@ -75,7 +101,7 @@ fn spawn_pause(
                 label_text(
                     card,
                     fonts,
-                    &format!("{} · PAUSED", theme.current().world_name),
+                    &format!("{world_name} · PAUSED"),
                     12.5,
                     theme::text_muted(),
                     false,

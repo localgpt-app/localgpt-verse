@@ -224,6 +224,89 @@ impl Palette {
     }
 }
 
+/// The current section's feel, as authored by the recipe's choreography (or
+/// neutral when the recipe has none / is absent). Written by
+/// [`sync_section_moment`], read by [`animate_world`].
+#[derive(Resource)]
+pub struct SectionFeel {
+    /// Additive energy shift (-1..1) for the current section: negative calms
+    /// the beat glow, positive intensifies it.
+    pub energy_shift: f32,
+    /// Motion multiplier for the current section (Calm 0.5 / Drift 1.0 /
+    /// Active 1.6), applied on top of the recipe's `motion_speed`.
+    pub motion: f32,
+}
+
+impl Default for SectionFeel {
+    fn default() -> Self {
+        Self {
+            energy_shift: 0.0,
+            motion: 1.0,
+        }
+    }
+}
+
+/// Apply the recipe's section choreography (M7): when the transport crosses
+/// into a new measured section, adopt its [`crate::recipe::SectionMoment`]
+/// (energy shift, motion) and optionally re-run the palette wash — the 0.8s
+/// colour breathe the crossfade already uses. Sections are fractions of the
+/// track ([`Playback::sections`]); the moment→section mapping was resolved
+/// against the full analysis by `sync_analysis`
+/// ([`crate::recipe::ActiveRecipe::moments`]).
+pub fn sync_section_moment(
+    playback: Res<Playback>,
+    active_recipe: Res<crate::recipe::ActiveRecipe>,
+    mut feel: ResMut<SectionFeel>,
+    mut wash: ResMut<PaletteWash>,
+    mut last: Local<Option<usize>>,
+    mut last_track: Local<Option<Option<String>>>,
+) {
+    if playback.sections.is_empty() {
+        return;
+    }
+    // A new track re-enters segment 0 — reset the cache so its intro moment
+    // (if any) applies instead of being swallowed by the previous track's.
+    let track = playback.track().id.clone();
+    if *last_track != Some(track.clone()) {
+        *last_track = Some(track);
+        *last = None;
+    }
+    let frac = playback.fraction();
+    // Boundaries include 0.0, so the segment index is the count of boundaries
+    // at-or-before the playhead, minus that leading 0.0.
+    let segment = playback
+        .sections
+        .iter()
+        .filter(|&&s| s <= frac)
+        .count()
+        .saturating_sub(1);
+    if *last == Some(segment) {
+        return;
+    }
+    *last = Some(segment);
+
+    // Reset to neutral, then adopt this segment's moment if one targets it.
+    *feel = SectionFeel::default();
+    if let Some((_, m)) = active_recipe
+        .moments
+        .iter()
+        .find(|(idx, _)| *idx == segment)
+    {
+        feel.energy_shift = m.energy_shift;
+        feel.motion = match m.motion {
+            crate::recipe::Motion::Calm => 0.5,
+            crate::recipe::Motion::Drift => 1.0,
+            crate::recipe::Motion::Active => 1.6,
+        };
+        if m.palette_wash {
+            // Re-run the wash to the current palette — a 0.8s colour breathe.
+            wash.from = wash.current;
+            wash.t = 0.0;
+            wash.active = true;
+        }
+    }
+}
+
 /// Palette-wash duration (spec 1g: "palette wash 0.8s").
 const WASH_SECS: f32 = 0.8;
 
@@ -251,16 +334,27 @@ impl Default for PaletteWash {
 }
 
 /// Ease the world's colours toward the current mood instead of snapping
-/// (spec 1g's 0.8s palette wash). Runs before `animate_world`, which rescales
-/// the drifter emissive per-beat while keeping the washed hue.
+/// (spec 1g's 0.8s palette wash), then paint the (settled or washing) palette
+/// every frame with the recipe's atmosphere riding on top — fog density, the
+/// ambient tint, and the primary biome's tint (each a ≤40% mix, per
+/// `recipe.rs`'s contract). Applying every frame (rather than only while a
+/// wash runs) means a recipe landing mid-track modulates the world without
+/// retriggering a wash, and un-applies just as cleanly. Runs before
+/// `animate_world`, which rescales the drifter emissive per-beat while keeping
+/// the washed hue.
 #[allow(clippy::too_many_arguments)]
 pub fn palette_wash(
     time: Res<Time>,
     theme: Res<Theme>,
+    active_recipe: Res<crate::recipe::ActiveRecipe>,
+    env_override: Res<crate::agent_types::EnvOverride>,
     mut wash: ResMut<PaletteWash>,
     world_mats: Option<Res<WorldMaterials>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut ambient_q: Query<&mut AmbientLight>,
+    // The agent's own ambient entity (M7, `llm`) owns its colour; the wash
+    // owns every other ambient. The marker is ungated so this query compiles
+    // in every feature config.
+    mut ambient_q: Query<&mut AmbientLight, Without<crate::agent_types::AgentAmbient>>,
     mut fog_q: Query<&mut DistanceFog>,
     mut clear: ResMut<ClearColor>,
 ) {
@@ -271,26 +365,54 @@ pub fn palette_wash(
         wash.t = 0.0;
         wash.active = true;
     }
-    if !wash.active {
-        return;
+    if wash.active {
+        wash.t += time.delta_secs();
+        let f = (wash.t / WASH_SECS).clamp(0.0, 1.0);
+        let s = f * f * (3.0 - 2.0 * f); // smoothstep
+        let to = Palette::of(theme.current());
+        wash.current = wash.from.mix(&to, s);
+        if f >= 1.0 {
+            wash.active = false;
+        }
     }
 
-    wash.t += time.delta_secs();
-    let f = (wash.t / WASH_SECS).clamp(0.0, 1.0);
-    let s = f * f * (3.0 - 2.0 * f); // smoothstep
-    let to = Palette::of(theme.current());
-    wash.current = wash.from.mix(&to, s);
-    if f >= 1.0 {
-        wash.active = false;
+    let recipe = active_recipe.get();
+    let fog_density = recipe
+        .map(|r| r.atmosphere.fog_density)
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    let ambient_tint = recipe.map(|r| r.atmosphere.ambient_tint);
+    let biome_tint = recipe
+        .and_then(|r| r.biomes.first())
+        .map(|b| (b.tint, b.density.clamp(0.0, 1.0)));
+
+    let mut p = wash.current;
+    {
+        use bevy::color::Mix as _;
+        let tint = |c: Color, t: [f32; 3], f: f32| c.mix(&Color::srgb(t[0], t[1], t[2]), f * 0.4);
+        if let Some((t, d)) = biome_tint {
+            p.ground = tint(p.ground, t, d);
+            p.drift_base = tint(p.drift_base, t, d);
+            p.fog = tint(p.fog, t, d);
+        }
+        if let Some(t) = ambient_tint {
+            p.ambient = tint(p.ambient, t, 1.0);
+        }
     }
 
-    let p = wash.current;
-    clear.0 = p.sky_top;
+    // The agent's environment override wins when its track is current; the
+    // mood's sky is the fallback (and the rule path's only value).
+    clear.0 = env_override.background.unwrap_or(p.sky_top);
     for mut ambient in &mut ambient_q {
         ambient.color = p.ambient;
     }
     for mut fog in &mut fog_q {
         fog.color = p.fog;
+        // fog_density 0 = today's band (18..95); 1 = a near wall (5..30).
+        fog.falloff = FogFalloff::Linear {
+            start: 18.0 - 13.0 * fog_density,
+            end: 95.0 - 65.0 * fog_density,
+        };
     }
     let Some(world_mats) = world_mats else { return };
     if let Some(mut m) = materials.get_mut(&world_mats.ground) {
@@ -380,13 +502,16 @@ pub fn spawn_particles(
 }
 
 /// Drift the shapes; pulse their glow with the beat; obey the world clock so a
-/// paused world slows to a near-freeze (time-dilation).
+/// paused world slows to a near-freeze (time-dilation). The recipe's
+/// `motion_speed` and the current section's feel ([`SectionFeel`]) both scale
+/// the motion; the section's `energy_shift` rides on the live energy envelope.
 #[allow(clippy::too_many_arguments)]
 pub fn animate_world(
     time: Res<Time>,
     clock: Res<WorldClock>,
     beat: Res<Beat>,
     comfort: Res<crate::Comfort>,
+    feel: Res<SectionFeel>,
     active_recipe: Res<crate::recipe::ActiveRecipe>,
     world_mats: Option<Res<WorldMaterials>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -397,9 +522,10 @@ pub fn animate_world(
     let dt = time.delta_secs() * clock.speed;
     // Comfort › Gentler world motion damps the sway (spec 1n).
     let gentle = if comfort.gentler_motion { 0.4 } else { 1.0 };
-    // M7: a recipe may scale drift speed within [0.25, 2.5] (already clamped).
+    // M7: a recipe may scale drift speed within [0.25, 2.5] (already clamped),
+    // and the current section's choreography multiplies on top (Calm/Active).
     // Absent recipe → 1.0 (today's behaviour).
-    let motion = active_recipe.get().map(|r| r.motion_speed).unwrap_or(1.0);
+    let motion = active_recipe.get().map(|r| r.motion_speed).unwrap_or(1.0) * feel.motion;
 
     for (d, mut tf) in &mut drifters {
         let p = t * clock.speed;
@@ -437,11 +563,12 @@ pub fn animate_world(
     // let-chain: chained `let` bindings are read-only in Rust 2024.)
     let Some(world_mats) = world_mats else { return };
     if let Some(mut material) = materials.get_mut(&world_mats.drifter) {
-        // Comfort › Reduce flashing holds the glow steady (no beat pulse).
+        // Comfort › Reduce flashing holds the glow steady (no beat pulse). The
+        // section's energy shift rides on the live envelope (clamped ≥0).
         let glow = if comfort.reduce_flashing {
             0.7
         } else {
-            0.55 + beat.pulse * 0.9 * beat.energy
+            0.55 + beat.pulse * 0.9 * (beat.energy + feel.energy_shift).max(0.0)
         };
         // M7: scale the glow by the recipe's bloom ceiling (1.0 = today).
         let glow = glow
