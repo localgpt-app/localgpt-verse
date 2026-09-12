@@ -127,16 +127,22 @@ impl RecipeModel {
 /// the bare filenames within that directory.
 fn locate_model() -> Option<(PathBuf, String, String)> {
     let dir = crate::world_assets::asset_root().join("llm");
-    if !dir.exists() {
+    let found = locate_model_in(&dir);
+    if found.is_none() {
         warn!(
-            "llm: {} not found — rule recipes only (run scripts/fetch-bonsai.sh)",
+            "llm: no model in {} — rule recipes only (run scripts/fetch-bonsai.sh)",
             dir.display()
         );
-        return None;
     }
+    found
+}
 
+/// [`locate_model`] over an explicit directory, so the discovery contract is
+/// testable against a temp dir instead of whatever happens to sit in
+/// `assets/llm/` on the dev machine (a fetched model must not flip the test).
+fn locate_model_in(dir: &PathBuf) -> Option<(PathBuf, String, String)> {
     // First .gguf in the directory wins.
-    let gguf = std::fs::read_dir(&dir).ok()?.find_map(|entry| {
+    let gguf = std::fs::read_dir(dir).ok()?.find_map(|entry| {
         let entry = entry.ok()?;
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.ends_with(".gguf") {
@@ -145,12 +151,8 @@ fn locate_model() -> Option<(PathBuf, String, String)> {
             None
         }
     })?;
-    if gguf.is_empty() {
-        warn!("llm: no .gguf in {} — rule recipes only", dir.display());
-        return None;
-    }
 
-    let tokenizer = std::fs::read_dir(&dir)
+    let tokenizer = std::fs::read_dir(dir)
         .ok()?
         .find_map(|entry| {
             let entry = entry.ok()?;
@@ -163,7 +165,7 @@ fn locate_model() -> Option<(PathBuf, String, String)> {
         })
         .unwrap_or_else(|| "tokenizer.json".to_string());
 
-    Some((dir, gguf, tokenizer))
+    Some((dir.clone(), gguf, tokenizer))
 }
 
 /// Turn a track's MIR analysis into the system+user prompt for recipe authoring.
@@ -210,10 +212,50 @@ Author a WorldRecipe for this track.",
 mod tests {
     use super::*;
 
+    /// A unique temp dir for model-discovery tests; caller drops it.
+    fn temp_llm_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "reverie-llm-test-{tag}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     #[test]
-    fn locate_model_returns_none_when_dir_absent() {
-        // The default asset root has no `llm/` dir, so this is the no-model
-        // path — the graceful-fallback contract.
-        assert!(locate_model().is_none());
+    fn locate_model_returns_none_when_no_gguf() {
+        // Empty dir (and, via locate_model, an absent one) → the no-model
+        // graceful-fallback path. Tested against a temp dir so a fetched model
+        // on the dev machine can't flip the result.
+        assert!(locate_model_in(&temp_llm_dir("empty")).is_none());
+        assert!(locate_model_in(&PathBuf::from("/nonexistent/reverie-llm")).is_none());
+    }
+
+    #[test]
+    fn locate_model_finds_the_gguf_and_tokenizer() {
+        let dir = temp_llm_dir("full");
+        std::fs::write(dir.join("some-model.gguf"), b"gguf").unwrap();
+        std::fs::write(dir.join("tokenizer.json"), b"{}").unwrap();
+        // A non-gguf file must not win the scan.
+        std::fs::write(dir.join("notes.txt"), b"x").unwrap();
+
+        let (model_id, gguf, tokenizer) = locate_model_in(&dir).expect("model found");
+        assert_eq!(model_id, dir);
+        assert_eq!(gguf, "some-model.gguf");
+        assert_eq!(tokenizer, "tokenizer.json");
+    }
+
+    #[test]
+    fn locate_model_defaults_the_tokenizer_name_when_absent() {
+        // A bare GGUF still resolves; mistral.rs reports the missing file at
+        // build time (the fetch script's note covers this).
+        let dir = temp_llm_dir("no-tok");
+        std::fs::write(dir.join("m.gguf"), b"gguf").unwrap();
+        let (_, gguf, tokenizer) = locate_model_in(&dir).expect("model found");
+        assert_eq!(gguf, "m.gguf");
+        assert_eq!(tokenizer, "tokenizer.json");
     }
 }

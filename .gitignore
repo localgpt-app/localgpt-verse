@@ -10,3 +10,5 @@
 /assets/ml/tokenizer.json
 # Starter music: source of truth is reverie-assets/music, copied in for dev
 /assets/music
+# LLM model (M7): downloaded via scripts/fetch-bonsai.sh, never committed
+/assets/llm

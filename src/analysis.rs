@@ -618,6 +618,30 @@ pub struct AnalysisStore {
     /// Kept so [`shutdown`](AnalysisStore::shutdown) can join the worker rather
     /// than merely dropping its channel. `None` only after shutdown took it.
     worker: Option<std::thread::JoinHandle<()>>,
+    /// Set by [`shutdown`](AnalysisStore::shutdown); the worker's clone checks
+    /// it between tracks, between model passes, and (per turn) inside the
+    /// agent loop.
+    cancel: WorkerCancel,
+}
+
+/// Cooperative cancellation for the analysis worker.
+///
+/// `shutdown` sets it; the worker checks it between tracks and between model
+/// passes, and the agent session checks it between LLM turns. A generation
+/// already inside mistral.rs cannot be interrupted — the checks bound how much
+/// *more* work starts, never the turn in flight (which is what
+/// [`SHUTDOWN_TIMEOUT`]'s detach backstop is for).
+#[derive(Clone, Default)]
+pub struct WorkerCancel(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl WorkerCancel {
+    fn cancel(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    /// Whether shutdown was requested. Checked cooperatively; never blocks.
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 /// What the analysis worker needs from the app.
@@ -663,6 +687,8 @@ impl AnalysisStore {
     pub fn spawn(deps: WorkerDeps) -> Self {
         let (req_tx, req_rx) = channel::<(String, PathBuf)>();
         let (res_tx, res_rx) = channel::<WorkerResult>();
+        let cancel = WorkerCancel::default();
+        let worker_cancel = cancel.clone();
         let worker = std::thread::spawn(move || {
             // Moved in so the worker owns its dependencies for its whole life.
             // Without `llm` the struct is empty; destructuring consumes it so
@@ -685,6 +711,12 @@ impl AnalysisStore {
             #[cfg(feature = "llm")]
             let mut recipe_model = crate::tier::Tier::<crate::llm::RecipeModel>::Cold;
             for (id, path) in req_rx {
+                // Shutdown drains the request channel first, so a request
+                // still in flight when cancel landed is dropped here rather
+                // than starting minutes of model work nothing will read.
+                if worker_cancel.is_cancelled() {
+                    break;
+                }
                 let analysis = match load_sidecar(&id) {
                     Some(a) => a,
                     None => {
@@ -746,9 +778,12 @@ impl AnalysisStore {
                     analysis
                 };
                 // M7 recipe upgrade pass — the top rung. Only when the LLM
-                // feature + model are present, and the sidecar lacks a recipe.
+                // feature + model are present, the sidecar lacks a recipe, and
+                // shutdown hasn't been requested (a cancelled pass would be a
+                // multi-minute generation nothing will read).
                 #[cfg(feature = "llm")]
                 let analysis = if analysis.recipe.is_none()
+                    && !worker_cancel.is_cancelled()
                     && let Some(model) = recipe_model.get_or_load(crate::llm::RecipeModel::try_load)
                 {
                     match model.generate(&analysis) {
@@ -786,15 +821,25 @@ impl AnalysisStore {
                 // pays the load and the other reuses it. The manifest is read
                 // from disk (the worker can't reach the Bevy-side resource) so
                 // the agent's `place_asset` tool carries the real asset
-                // vocabulary; absent manifest → primitives only.
+                // vocabulary; absent manifest → primitives only. The cancel
+                // handle threads through so a session in flight stops at the
+                // next turn boundary (see `run_session`).
                 #[cfg(feature = "llm")]
                 let analysis = if analysis.build.is_none()
+                    && !worker_cancel.is_cancelled()
                     && let Some(bridge) = deps.agent_bridge.clone()
                     && let Some(model) = recipe_model.get_or_load(crate::llm::RecipeModel::try_load)
                 {
                     let m = model.model_mut();
                     let manifest = crate::world_assets::read_manifest_from_disk();
-                    match crate::agent::run_session(m, bridge, &analysis, &id, manifest.as_ref()) {
+                    match crate::agent::run_session(
+                        m,
+                        bridge,
+                        &analysis,
+                        &id,
+                        manifest.as_ref(),
+                        &worker_cancel,
+                    ) {
                         Some(build) => {
                             if let Some(d) = &build.description {
                                 info!("Agent described its world for {}: {d}", path.display());
@@ -825,27 +870,56 @@ impl AnalysisStore {
             tx: req_tx,
             rx: Mutex::new(res_rx),
             worker: Some(worker),
+            cancel,
         }
     }
 
-    /// Stop the worker and wait for it to exit.
+    /// How long [`AnalysisStore::shutdown`] waits for the worker before
+    /// detaching it. Generous for the cooperative cases (idle, mid-decode,
+    /// between LLM turns); a single LLM generation already inside mistral.rs
+    /// can exceed it — that is exactly the case the detach covers.
+    const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+    /// Stop the worker, waiting at most [`SHUTDOWN_TIMEOUT`].
     ///
-    /// Drops the request sender so the worker's `for (id, path) in req_rx` loop
-    /// ends, then joins. A request already in flight (a multi-second decode plus
-    /// model inference) finishes first — that is the point: the CLAP, demucs,
-    /// and recipe models the worker owns are released before this returns,
-    /// rather than being abandoned mid-use.
-    ///
-    /// Bounding the wait would need a cancel flag checked inside `analyze()`;
-    /// today a shutdown during analysis blocks for the rest of that track.
+    /// Cooperative first: the [`WorkerCancel`] flag makes a worker that is
+    /// idle, decoding, or between model passes exit promptly, and a running
+    /// agent session stop at its next turn boundary. A generation already
+    /// inside mistral.rs cannot be interrupted, so after the bounded wait the
+    /// worker is *detached* — it finishes its turn, fails its (closed) result
+    /// channel, and releases the models on its own. The `Err` returned on a
+    /// detach is a diagnostic (the scope machinery logs it); teardown proceeds
+    /// either way.
     pub fn shutdown(mut self) -> Result<(), String> {
         let Some(worker) = self.worker.take() else {
             return Ok(());
         };
+        self.cancel.cancel();
+        // Dropping `self` closes the request channel (ending the loop) and the
+        // result channel (so an in-flight send returns Err and the worker
+        // exits instead of writing into a dead store).
         drop(self);
-        worker
-            .join()
-            .map_err(|_| "analysis worker panicked".to_string())
+
+        // Join on a helper thread so the wait can be bounded: std has no
+        // timed join, and an unbounded one is what this whole method exists
+        // to avoid. The join's Result travels through the channel; on timeout
+        // the helper (and worker) are simply left to finish unnoticed.
+        let (done_tx, done_rx) = channel::<Result<(), String>>();
+        std::thread::spawn(move || {
+            let _ = done_tx.send(
+                worker
+                    .join()
+                    .map_err(|_| "analysis worker panicked".to_string()),
+            );
+        });
+        match done_rx.recv_timeout(Self::SHUTDOWN_TIMEOUT) {
+            Ok(result) => result,
+            Err(_) => Err(format!(
+                "analysis worker detached: still finishing an LLM turn after {}s — \
+                 it exits and releases its models on its own",
+                Self::SHUTDOWN_TIMEOUT.as_secs()
+            )),
+        }
     }
 }
 
@@ -1304,6 +1378,32 @@ mod tests {
     fn shutdown_joins_a_worker_with_no_requests_in_flight() {
         let store = AnalysisStore::spawn(WorkerDeps::default());
         assert!(store.shutdown().is_ok());
+    }
+
+    #[test]
+    fn a_cancel_flag_is_unset_until_cancelled_and_shared_across_clones() {
+        let cancel = WorkerCancel::default();
+        let worker_view = cancel.clone();
+        assert!(!worker_view.is_cancelled());
+
+        cancel.cancel();
+        assert!(worker_view.is_cancelled(), "the worker's view sees it");
+    }
+
+    #[test]
+    fn shutdown_is_prompt_for_an_idle_worker() {
+        // The cooperative path: no work in flight, so the worker notices the
+        // flag and exits well inside the 15s bound. A slow path (mid-LLM-turn
+        // detach) needs a real model and is covered by the bounded-join
+        // design rather than a unit test.
+        let store = AnalysisStore::spawn(WorkerDeps::default());
+        let started = std::time::Instant::now();
+        assert!(store.shutdown().is_ok());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "idle shutdown took {:?} — the cancel flag isn't being observed",
+            started.elapsed()
+        );
     }
 
     // -----------------------------------------------------------------------

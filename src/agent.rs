@@ -1016,7 +1016,10 @@ pub fn replay_cached_build(
 ///
 /// `track_id` scopes everything the session spawns to that track (see the
 /// module docs on track scoping); `manifest` supplies the asset vocabulary for
-/// the `place_asset` tool (`None` = primitives only).
+/// the `place_asset` tool (`None` = primitives only). `cancel` is the worker's
+/// cooperative shutdown flag — checked between turns and between tool calls; a
+/// generation already inside mistral.rs finishes (see
+/// `AnalysisStore::shutdown` for the detach backstop).
 ///
 /// Blocks the calling thread on a dedicated tokio runtime (the analysis worker
 /// is a plain std::thread — no async pollution of the rest of the app).
@@ -1026,6 +1029,7 @@ pub fn run_session(
     analysis: &TrackAnalysis,
     track_id: &str,
     manifest: Option<&AssetManifest>,
+    cancel: &crate::analysis::WorkerCancel,
 ) -> Option<SceneBuild> {
     use mistralrs::{RequestBuilder, TextMessageRole, ToolChoice};
 
@@ -1055,7 +1059,11 @@ pub fn run_session(
             .set_tools(tools)
             .set_tool_choice(ToolChoice::Auto);
 
-        for step in 0..MAX_AGENT_STEPS {
+        'steps: for step in 0..MAX_AGENT_STEPS {
+            if cancel.is_cancelled() {
+                info!("agent: cancelled at step {step} — keeping what was built");
+                break;
+            }
             let response = match model.send_chat_request(messages.clone()).await {
                 Ok(r) => r,
                 Err(e) => {
@@ -1082,6 +1090,10 @@ pub fn run_session(
             );
 
             for call in tool_calls {
+                if cancel.is_cancelled() {
+                    info!("agent: cancelled mid-turn at step {step}");
+                    break 'steps;
+                }
                 let name = &call.function.name;
                 let args = &call.function.arguments;
                 match parse_tool_call(name, args) {
