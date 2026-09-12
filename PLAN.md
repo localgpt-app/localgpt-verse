@@ -207,6 +207,23 @@ attribution already wired through the manifest → Credits screen.
 >   the cached `SceneBuild` and logged. Step budget 12 → 24.
 > - **CI now compiles both gated tiers** (`cargo check --features llm` / `ml`
 >   in the reverie job) — the default-feature gate alone let them rot.
+>
+> **2026-09-12 — runtime-verified with the real model, three defects found &
+> fixed:** Bonsai-8B **Q4_K_M** (5.2 GB, Apache-2.0 — license caveat cleared
+> for the LLM tier) over a new opt-in `llm-metal` feature: plain generation
+> ~25 tok/s, per-track recipes in 20–80 s, agent sessions of 24 tool-calls,
+> cached-build replay exercised on track changes. Along the way: (1) the
+> original Q1_0 pick doesn't parse in mistral.rs 0.8 — the fetch script now
+> defaults to the verified Q4_K_M; (2) the 5 GB model doesn't fit the *CPU*
+> device map beside the renderer (~7.6 GB free) — hence `llm-metal` (macOS
+> GPU; never in Linux CI); (3) mistral.rs 0.8's grammar-constrained
+> `generate_structured` **hangs on GGUF even for a two-field schema** (plain
+> chat on the same loaded model is fine) — recipe generation is now plain
+> instructed-JSON + a lenient balanced-object parse (serde defaults +
+> `clamped()` + rule fallback keep the safety), under a 180 s timeout; the
+> `llm_generation_probe` ignored test documents all three. Worker shutdown is
+> also bounded now: a `WorkerCancel` flag checked between tracks/passes/turns
+> plus a 15 s join with detach backstop.
 
 
 **M1 — Real playback core.**

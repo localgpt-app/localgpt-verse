@@ -69,6 +69,12 @@ ml = ["dep:ort", "dep:rubato", "dep:stem-splitter-core"]
 # its `JsonSchema` bound on `generate_structured`; `tokio` drives the worker
 # thread's block_on runtime (mistralrs's build()/generate are async).
 llm = ["dep:mistralrs", "dep:schemars", "dep:tokio"]
+# Apple-Silicon acceleration for the LLM tiers (PLAN.md M7): runs the GGUF on
+# the Metal GPU — unified memory makes the 5 GB Q4_K_M fit comfortably (the
+# CPU device map saw only ~7.6 GB free and refused) and generation is an order
+# of magnitude faster. Opt-in because candle-metal is macOS-only, so this
+# feature must never be built into the Linux CI job.
+llm-metal = ["llm", "mistralrs/metal"]
 
 [dependencies.ort]
 # Pinned to rc.11 to match `stem-splitter-core` (which pins =2.0.0-rc.11). The
@@ -102,5 +108,5 @@ optional = true
 
 [dependencies.tokio]
 version = "1"
-features = ["rt"]
+features = ["rt", "time"]
 optional = true

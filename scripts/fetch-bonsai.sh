@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # Fetch the LLM for the `llm` feature (PLAN.md M7, src/llm.rs).
 #
-# Default model: Bonsai-8B 1-bit GGUF (Q1_0) — Apache-2.0 (prism-ml), the
-# largest text-only Bonsai. Q1_0 is merged into upstream llama.cpp, so
-# mistral.rs (which tracks upstream) can load it. The ternary (Q2_0) Bonsai
-# models are NOT supported (Prism fork only) — do not fetch those for this
-# app.
+# Default model: Bonsai-8B Q4_K_M (~5.2 GB, Apache-2.0). Runtime-verified on
+# Apple Silicon via the `llm-metal` feature (~25 tok/s plain generation).
 #
-# The GGUF repo ships no tokenizer.json, and mistral.rs's GgufModelBuilder
-# requires one — it comes from the unpacked repo (same Apache-2.0 release).
+# Notes from that verification (2026-09):
+#   - The 1-bit Q1_0 quant from prism-ml/Bonsai-8B-gguf does NOT parse in
+#     mistral.rs 0.8 ("Critical failure loading model part 0") — don't fetch it.
+#   - The 5 GB Q4_K_M does not fit the CPU device map alongside the world
+#     renderer (~7.6 GB free seen); build with `--features llm-metal` on Macs.
+#   - mistral.rs 0.8's grammar-constrained `generate_structured` hangs on GGUF
+#     (even a two-field schema) — src/llm.rs deliberately uses plain
+#     instructed-JSON generation instead.
 #
-# Fallback (documented, not automatic): if the 1-bit model underperforms or
-# fails to load, drop any standard Q4_K_M GGUF (e.g. Qwen2.5-7B-Instruct,
-# Llama-3.1-8B-Instruct) + its matching tokenizer.json into assets/llm/
-# instead — src/llm.rs discovers the first .gguf it finds, so no code change
-# is needed.
+# The tokenizer comes from prism-ml/Bonsai-8B-unpacked (the GGUF repos ship
+# none, and mistral.rs's GgufModelBuilder requires one).
+#
+# Any standard GGUF (e.g. Qwen2.5-7B-Instruct) + its matching tokenizer.json
+# dropped into assets/llm/ is picked up the same way — src/llm.rs loads the
+# first .gguf it finds, so no code change is needed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -22,8 +26,8 @@ OUT="assets/llm"
 mkdir -p "$OUT"
 
 # Defaults; override with BONSAI_REPO / BONSAI_FILE / BONSAI_TOKENIZER_REPO.
-GGUF_REPO="${BONSAI_REPO:-prism-ml/Bonsai-8B-gguf}"
-GGUF_FILE="${BONSAI_FILE:-Bonsai-8B-Q1_0.gguf}"
+GGUF_REPO="${BONSAI_REPO:-bartowski/prism-ml_Bonsai-8B-unpacked-GGUF}"
+GGUF_FILE="${BONSAI_FILE:-prism-ml_Bonsai-8B-unpacked-Q4_K_M.gguf}"
 TOK_REPO="${BONSAI_TOKENIZER_REPO:-prism-ml/Bonsai-8B-unpacked}"
 
 fetch() { # <url> <dest>
@@ -31,7 +35,7 @@ fetch() { # <url> <dest>
   if [ -s "$dest" ]; then
     echo "  have $dest"
   else
-    echo "fetching $url"
+    echo "fetching $url (~5.2 GB; resumable — re-run if interrupted)"
     # -C - resumes a partial download; -L follows HF redirects.
     curl -L --fail -C - -o "$dest" "$url"
   fi
@@ -43,5 +47,6 @@ fetch "https://huggingface.co/${TOK_REPO}/resolve/main/tokenizer.json" \
   "$OUT/tokenizer.json"
 
 echo "done -> $OUT"
-echo "license: Bonsai-8B weights + tokenizer are Apache-2.0 (prism-ml);"
-echo "        still verify NOTICE.txt before distribution."
+echo "license: Bonsai-8B weights + tokenizer are Apache-2.0 (prism-ml /"
+echo "        bartowski's quant); still verify NOTICE.txt before distribution."
+echo "run with: cargo run --features llm-metal   # macOS GPU path"
