@@ -84,15 +84,17 @@
 <body>
 <main>
   <h1><span class="dot">●</span> Reverie — LLM Integration Progress</h1>
-  <p class="sub">Tracking the gap analysis → fix work on the <code>llm</code> tiers (recipe + agent).
-     Last updated <strong>2026-09-12</strong> · baseline commits <code>c27f6d2</code> →
-     <code>396b074</code> · <strong style="color:var(--ok)">runtime-verified with the real model</strong></p>
+  <p class="sub">Tracking the gap analysis → fix work on the <code>llm</code> tiers (recipe + agent)
+     and the world-interestingness rounds.
+     Last updated <strong>2026-09-13</strong> · commits <code>c27f6d2</code> →
+     <code>c738a4a</code> · <strong style="color:var(--ok)">runtime-verified with the real model</strong></p>
 
   <div class="summary">
     <div class="stat ok"><b>5 / 5</b><span>gap items fixed &amp; committed</span></div>
+    <div class="stat ok"><b>8</b><span>world-interestingness items shipped</span></div>
     <div class="stat ok"><b>4 / 4</b><span>tracks got LLM recipes in the live app</span></div>
-    <div class="stat ok"><b>3 / 4</b><span>tracks got agent builds (24 cmds each)</span></div>
-    <div class="stat next"><b>4</b><span>follow-ups remain</span></div>
+    <div class="stat next"><b>5</b><span>backlog items remain</span></div>
+    <div class="stat human"><b>1</b><span>needs a human decision (CLAP license)</span></div>
   </div>
 
   <h2>Shipped — verified compile + tests + smoke</h2>
@@ -174,88 +176,51 @@
       <span class="where">src/audio.rs · src/playback.rs · src/analysis.rs · src/world.rs · src/world_assets.rs</span></li>
   </ul>
 
-  <h2>Backlog — world interestingness (ranked)</h2>
-  <table>
-    <tr><th></th><th>Item</th><th>Who</th><th>Notes</th></tr>
-    <tr>
-      <td class="pri"><span class="pill p1">P1</span></td>
-      <td><b>The skyline is the waveform.</b> Rim landmark heights sampled from the energy
-          curve — walk the world’s edge and you read the song’s structure. Deterministic,
-          cheap, high-concept.</td>
-      <td><span class="pill p2">Claude</span></td>
-      <td>Reuses placement machinery.</td>
-    </tr>
-    <tr>
-      <td class="pri"><span class="pill p1">P1</span></td>
-      <td><b>Materialize across the whole song.</b> Props currently all rise in the first
-          ~2.4 s; spread tiers over sections (scatter in the intro, heroes landing exactly
-          on the chorus) so the world grows with the track. <code>stagger_delay</code>
-          already exists — it needs section-anchored delays.</td>
-      <td><span class="pill p2">Claude</span></td>
-      <td>Directly uses the section data already resolved.</td>
-    </tr>
-    <tr>
-      <td class="pri"><span class="pill p1">P1</span></td>
-      <td><b>Per-section structural events.</b> Choreography currently shifts
-          energy/motion/palette; give moments verbs — chorus raises beacon intensity,
-          bridge strips particles, outro sinks scatter props.</td>
-      <td><span class="pill p2">Claude</span></td>
-      <td>Extends <code>sync_section_moment</code>.</td>
-    </tr>
-    <tr>
-      <td class="pri"><span class="pill p2">P2</span></td>
-      <td><b>Spectral-centroid hue + continuous mood blending.</b> Centroid is computed
-          then discarded — a continuous hue shift within the mood palette; CLAP embedding →
-          valence/arousal → interpolate adjacent mood palettes so two “Tide Gardens”
-          songs stop looking identical.</td>
-      <td><span class="pill p2">Claude</span></td>
-      <td><code>Palette::mix</code> exists.</td>
-    </tr>
-    <tr>
-      <td class="pri"><span class="pill p2">P2</span></td>
-      <td><b>LLM: per-section sub-recipes + agent timing.</b> N small recipes (faster and
-          more synced than one monolith) and an optional <code>at_role</code> on agent
-          commands so its structures rise on the drop / vanish for the bridge.</td>
-      <td><span class="pill p2">Claude</span></td>
-      <td>Schema + replay changes.</td>
-    </tr>
-    <tr>
-      <td class="pri"><span class="pill p2">P2</span></td>
-      <td><b>Prop behaviors + camera choreography + 3D world title.</b> Port gen’s
-          behavior set (orbit/spin/bob/pulse) to reverie props; section-aware Drift-camera
-          moves; the recipe’s <code>world_name</code> as horizon text in the intro.</td>
-      <td><span class="pill p2">Claude</span></td>
-      <td>Three small systems.</td>
-    </tr>
-    <tr>
-      <td class="pri"><span class="pill p3">P3</span></td>
-      <td><b>GPU instancing</b> to break the ~90-prop ceiling (measured 9 fps @ 5k
-          scene-root props) — the unlock for every “denser worlds” idea.</td>
-      <td><span class="pill p3">Claude</span></td>
-      <td>Infrastructure; biggest single item.</td>
-    </tr>
-    <tr>
-      <td class="pri"><span class="pill p3">P3</span></td>
-      <td><b>More mood packs</b> via the runtime registry (4 → 8–10 worlds) and
-          <b>ground-as-instrument</b> (bass-driven vertex displacement).</td>
-      <td><span class="pill p3">Claude</span></td>
-      <td>Content + one shader.</td>
-    </tr>
-  </table>
+  <h2>Shipped — world interestingness, rounds 2–5 (2026-09-12/13)</h2>
+  <ul class="clean">
+    <li><b>The world reads as the song.</b> Sections now have <em>structural verbs</em>
+      (eased): the chorus lights beacons ×1.4 and swells particles, the bridge strips
+      particles to 0.15 and dims beacons, the outro sinks scatter into the ground.
+      Without the LLM tier, roles fall back to positional (intro / middle chorus / last
+      outro), so every track gets them.
+      <span class="where">src/world.rs · src/world_assets.rs</span></li>
+    <li><b>The world materializes across the whole song.</b> Scatter rises in the intro
+      (still settling on the first downbeat), mediums spread through the verses, heroes and
+      landmarks land exactly on the chorus. Plus: <b>the skyline is the waveform</b> — 28 rim
+      stelae whose heights sample the energy curve, each rising with its section.
+      <span class="where">src/world_assets.rs</span></li>
+    <li><b>A performed world.</b> Placed props keep breathing (bob/spin riding the bass);
+      the Drift camera does section-aware moves (calm pulls up and out, active drops in
+      close, quiet ends pull wide); the recipe’s authored name appears as 3D horizon text
+      over the intro.
+      <span class="where">src/world_assets.rs · src/world.rs</span></li>
+    <li><b>Eight moods and the continuum between them.</b> CINDER REACH / MIRAGE CIRCUIT /
+      ABYSS TERRACES / DAWN EXPANSE split the four quadrants by energy (each borrowing its
+      base’s asset set); the palette also drifts continuously — spectral centroid nudges the
+      hues and boundary-adjacent tracks blend toward the world they almost landed in. Two
+      “Tide Gardens” songs no longer look identical.
+      <span class="where">src/theme.rs · src/analysis.rs · src/world.rs</span></li>
+    <li><b>The ground is an instrument</b> — a 64×64-subdivided plane displaced by a
+      bass-driven radial ripple + diagonal swell, distance-faded so the rim stays still,
+      gentler-motion-gated.
+      <span class="where">src/world.rs</span></li>
+    <li><b>Prop ceiling broken for ground cover.</b> The scatter tier merged into ONE
+      vertex-tinted procedural mesh (pebbles/shards/chips per arrangement) at 4× density in
+      a single draw — 86 entities → 41 props + 1 field of 180 pebbles. Density recipes now
+      have headroom to spend.
+      <span class="where">src/world_assets.rs</span></li>
+    <li><b>LLM polish.</b> The prompt demands an invented world name (no more mood-name
+      echo); the agent gets a wrap-up nudge 6 steps before budget so sessions close with a
+      description; <code>at_role</code> on <code>spawn_primitive</code>/<code>place_asset</code>
+      scopes structures to song sections (gateways for the bridge, monuments on the drop);
+      the pause overlay shows the tier — “imagined by Bonsai · agent scene: N parts” — plus
+      the agent’s description in quotes.
+      <span class="where">src/llm.rs · src/agent.rs · src/agent_types.rs · src/overlays/pause.rs</span></li>
+  </ul>
 
-  <h2>Backlog — LLM tier polish</h2>
+  <h2>Backlog — what remains</h2>
   <table>
     <tr><th></th><th>Item</th><th>Who</th><th>Notes</th></tr>
-    <tr>
-      <td class="pri"><span class="pill p2">P2</span></td>
-      <td><b>Recipe-name creativity + agent finish behaviour.</b> Verified runs show the
-          model echoing the mood name (“Tide Gardens”) instead of inventing one, and agent
-          sessions building to the 24-step budget without a closing description (so the
-          captured-description path never fires). Prompt tuning, or raise the budget and
-          add a “wrap up” nudge after ~16 steps.</td>
-      <td><span class="pill p2">Claude</span></td>
-      <td>Quality polish; the plumbing all works.</td>
-    </tr>
     <tr>
       <td class="pri"><span class="pill p2">P2</span></td>
       <td><b>Embedding-based asset selection.</b> The CLAP 512-d embedding is stored per
@@ -267,19 +232,35 @@
     </tr>
     <tr>
       <td class="pri"><span class="pill p2">P2</span></td>
-      <td><b>Surface the agent’s description + tier status in the UI.</b> The session’s
-          closing description is captured and logged but not shown; the pause overlay or
-          Settings could say which tier authored the world (rules / CLAP / recipe / agent).</td>
+      <td><b>Per-section sub-recipes.</b> N small recipes (one per section role) instead of
+          one monolith — faster generation and harder sync. The monolith is runtime-verified,
+          so this is an upgrade, not a fix.</td>
       <td><span class="pill p2">Claude</span></td>
-      <td>Small; pure UI.</td>
+      <td>Prompt + sidecar schema change.</td>
+    </tr>
+    <tr>
+      <td class="pri"><span class="pill p3">P3</span></td>
+      <td><b>True GPU instancing</b> for the hero/medium glTF tiers (the merged scatter
+          covers ground cover; scene-root clones still cap the rest — measured 14 fps @
+          1k props).</td>
+      <td><span class="pill p3">Claude</span></td>
+      <td>Infrastructure; the one remaining perf item.</td>
     </tr>
     <tr>
       <td class="pri"><span class="pill p3">P3</span></td>
       <td><b>M7 remainders.</b> Beat This! ONNX beat tracking
-          (<code>beat-this</code> crate, unaudited) and Demucs stem reactivity
-          (model fetched, curves stored, renderer still reads the mixed envelope).</td>
+          (<code>beat-this</code> crate, unaudited). Demucs reactivity is
+          <em>shipped</em> (stem curves sampled at the playhead into the world).</td>
       <td><span class="pill p3">Claude</span></td>
-      <td>None load-bearing; quality upgrades.</td>
+      <td>None load-bearing.</td>
+    </tr>
+    <tr>
+      <td class="pri"><span class="pill p3">P3</span></td>
+      <td><b>Asset packs for the four new moods</b> — they currently borrow their base
+          quadrant’s set (<code>ASSET_BASE_MOODS</code>); distinct sets want a
+          <code>reverie-assets</code> repo regen.</td>
+      <td><span class="pill human">human + Claude</span></td>
+      <td>Other-repo change (fetch_polyhaven.py tags).</td>
     </tr>
   </table>
 

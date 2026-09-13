@@ -196,6 +196,27 @@ full list); findings worth recording:
   no EXT_meshopt_compression (0.19) — offline normalization packs
   uncompressed `.glb` (173 MB for 52 models).
 
+## 11. The performed world (2026-09)
+
+The renderer's post-M7 growth, in one place (PROGRESS.html tracks status):
+
+- **Signal routing.** `analysis.rs` → `Beat` (bpm/pulse/energy + live tap
+  bass/highs bands) and `StemLevels` (Demucs curves sampled at the playhead,
+  stem value winning over the live band) → world systems. `SectionFeel` is
+  the eased per-section control vector (energy shift, motion, beacons,
+  particles, scatter); `sync_section_moment` resolves roles against measured
+  boundaries and positional song shape as the rule-path fallback.
+- **Structure, not just palette.** Whole-song materialize (scatter in the
+  intro, mediums in verses, heroes on the chorus), waveform skyline (rim
+  stelae from the energy curve), bass-displaced ground mesh, prop
+  bob/spin, section-aware Drift camera, horizon world title.
+- **The 8-mood continuum.** `BUILTIN_MOODS` doubled with quadrant variants
+  that borrow their base's assets (`ASSET_BASE_MOODS`); `Timbre` (sidecar
+  centroid) nudges hues and `MoodBlend` mixes the nearest boundary palette.
+- **Perf shape.** Ground cover is one merged vertex-tinted mesh at 4× the
+  old density (scatter no longer pays per-entity). Hero/medium glTF tiers
+  remain scene-root clones — true instancing is the remaining ceiling.
+
 ## 10. The LLM tiers (M7, runtime-verified 2026-09)
 
 The `llm` feature adds a local text LLM — **Bonsai-8B** (Qwen3-architecture

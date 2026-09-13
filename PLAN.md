@@ -224,6 +224,29 @@ attribution already wired through the manifest → Credits screen.
 > `llm_generation_probe` ignored test documents all three. Worker shutdown is
 > also bounded now: a `WorkerCancel` flag checked between tracks/passes/turns
 > plus a 15 s join with detach backstop.
+>
+> **2026-09-12/13 — the "world reads as the song" rounds** (all on `main`;
+> PROGRESS.html is the tracker):
+> - **Section structural verbs** (eased): chorus lights beacons ×1.4 / swells
+>   particles, bridge strips/dims, outro sinks scatter — positional fallback
+>   without the LLM tier. **Whole-song materialize**: scatter in the intro,
+>   mediums through the verses, heroes land exactly on the chorus. **Waveform
+>   skyline**: 28 rim stelae sample the energy curve.
+> - **Performed world**: prop bob/spin riding bass; section-aware Drift-camera
+>   moves; the recipe name as 3D horizon text over the intro.
+> - **Eight moods + continuum**: CINDER REACH / MIRAGE CIRCUIT / ABYSS TERRACES
+>   / DAWN EXPANSE split quadrants by energy (borrowing base asset sets via
+>   `ASSET_BASE_MOODS`); spectral centroid (now in the sidecar) nudges hues;
+>   boundary-adjacent tracks blend toward the neighbour world.
+> - **Ground as instrument** (bass-driven vertex displacement) and the
+>   **merged scatter field**: the scatter tier is one vertex-tinted
+>   procedural mesh at 4× density in one draw — 86 entities → 41 props + a
+>   180-pebble field.
+> - **Stem/band reactivity** (Demucs curves sampled at the playhead into
+>   `StemLevels`; the live tap publishes bass/highs envelopes) and **LLM
+>   polish**: inventive-name prompt, agent wrap-up nudge, `at_role`
+>   section-scoped agent placements, tier status + agent description in the
+>   pause overlay.
 
 
 **M1 — Real playback core.**
