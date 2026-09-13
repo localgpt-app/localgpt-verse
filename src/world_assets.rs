@@ -290,6 +290,49 @@ pub struct WorldProp;
 #[derive(Component)]
 pub struct ScatterProp;
 
+/// Ambient behaviour for a placed prop — a gentle per-prop sway/spin so the
+/// grounded world breathes with the track instead of freezing after the
+/// materialize. Heroes are monuments and stay still by design.
+#[derive(Component)]
+pub struct PropMotion {
+    /// Home Y (bob returns here, never fights the placement).
+    pub base_y: f32,
+    /// Deterministic per-prop phase.
+    pub seed: f32,
+    /// Bob amplitude (metres) — mediums 0.15, scatter 0.06.
+    pub bob: f32,
+    /// Yaw speed (rad/s) — a slow drift, not a carousel.
+    pub spin: f32,
+}
+
+/// Animate placed props' ambient behaviour after they settle: a slow bob and
+/// spin scaled by the recipe's motion, the section feel, and the bass level
+/// (the ground cover visibly rides the low end). Comfort › gentler world
+/// motion damps the bob; the spin is slow enough to keep.
+pub fn animate_props(
+    time: Res<Time>,
+    clock: Res<crate::WorldClock>,
+    comfort: Res<crate::Comfort>,
+    beat: Res<crate::playback::Beat>,
+    stems: Res<crate::playback::StemLevels>,
+    feel: Res<crate::world::SectionFeel>,
+    mut props: Query<(&PropRise, &PropMotion, &mut Transform), Without<crate::world::Drifter>>,
+) {
+    let gentle = if comfort.gentler_motion { 0.4 } else { 1.0 };
+    let bass = stems.0[1].max(beat.bass);
+    let t = time.elapsed_secs() * clock.speed;
+    let dt = time.delta_secs() * clock.speed;
+    for (rise, motion, mut tf) in &mut props {
+        if rise.t < rise.delay + rise.dur {
+            continue; // still materializing — the rise owns the transform
+        }
+        let p = t + motion.seed * std::f32::consts::TAU;
+        let bob = motion.bob * (1.0 + bass * 1.5) * gentle * feel.motion;
+        tf.translation.y = motion.base_y + p.sin() * bob;
+        tf.rotate_y(dt * motion.spin * feel.motion);
+    }
+}
+
 /// A landmark's emissive beacon, carrying its full-intensity emissive so
 /// [`pulse_beacons`] can breathe it with the drums/bass without recomputing
 /// the colour.
@@ -623,6 +666,16 @@ pub fn populate_world_props(
         }
         if p.tier == Tier::Scatter {
             e.insert(ScatterProp);
+        }
+        // Ambient behaviour: mediums bob visibly, scatter shimmers — both
+        // riding the bass. Heroes stay monuments.
+        if p.tier != Tier::Hero {
+            e.insert(PropMotion {
+                base_y: p.pos.y,
+                seed: rand01(&mut rng),
+                bob: if p.tier == Tier::Medium { 0.15 } else { 0.06 },
+                spin: if p.tier == Tier::Medium { 0.08 } else { 0.2 },
+            });
         }
         if let Some(emissive) = p.beacon {
             // An unlit sphere — glow without a per-landmark light cost. Its

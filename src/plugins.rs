@@ -147,6 +147,10 @@ impl Plugin for WorldPlugin {
             )
             .add_systems(
                 Update,
+                world::sync_world_title.run_if(in_state(AppState::InWorld)),
+            )
+            .add_systems(
+                Update,
                 world::camera_control
                     .run_if(in_state(AppState::InWorld))
                     .run_if(crate::not_paused),
@@ -167,6 +171,7 @@ impl Plugin for WorldAssetsPlugin {
                 (
                     world_assets::populate_world_props,
                     world_assets::rise_props,
+                    world_assets::animate_props,
                     world_assets::pulse_beacons,
                 )
                     .run_if(in_state(AppState::InWorld)),

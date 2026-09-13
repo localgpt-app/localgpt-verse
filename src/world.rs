@@ -25,6 +25,9 @@ pub struct WorldCamera {
     pub pitch: f32,
     /// Auto-orbit angle used in Drift mode.
     pub orbit: f32,
+    /// Eased orbit radius/height for Drift choreography (metres).
+    pub eased_radius: f32,
+    pub eased_height: f32,
 }
 
 /// A drifting decorative shape.
@@ -112,6 +115,8 @@ pub fn setup_world(
             yaw: 0.0,
             pitch: -0.08,
             orbit: 0.0,
+            eased_radius: 16.0,
+            eased_height: 3.0,
         },
     ));
 
@@ -731,10 +736,20 @@ pub fn animate_world(
     }
 }
 
-/// Camera feel: Drift auto-orbits slowly; Explore is WASD + mouse-look.
+/// Camera feel: Drift auto-orbits with section-aware choreography; Explore is
+/// WASD + mouse-look.
+///
+/// The Drift rig reads the section feel: calm sections pull up and out for the
+/// overview, active ones drop in low and close, and the quiet ends (intro,
+/// outro, bridge — wherever the beacons dim) add a wider, higher pull-away.
+/// Everything eases (never snaps), and the look-target rises with the live
+/// energy so the chorus literally lifts the gaze.
+#[allow(clippy::too_many_arguments)]
 pub fn camera_control(
     time: Res<Time>,
     clock: Res<WorldClock>,
+    beat: Res<Beat>,
+    feel: Res<SectionFeel>,
     mode: Res<CameraMode>,
     keys: Res<ButtonInput<KeyCode>>,
     motion: Res<AccumulatedMouseMotion>,
@@ -748,10 +763,24 @@ pub fn camera_control(
 
     match *mode {
         CameraMode::Drift => {
-            cam.orbit += dt * 0.06 * clock.speed;
-            let r = 16.0;
-            let target = Vec3::new(0.0, 2.2, -6.0);
-            tf.translation = target + Vec3::new(cam.orbit.cos() * r, 3.0, cam.orbit.sin() * r);
+            // Section choreography: motion 0.5 (calm) → radius ~19.4, height
+            // ~4.9; motion 1.0 (drift) → 16.25 / 3.0; motion 1.6 (active) →
+            // 12.5 / 0.75. Quiet sections (dim beacons) pull further away.
+            let quiet = (1.0 - feel.beacons.clamp(0.0, 1.0)).max(0.0);
+            let target_r = 22.5 - feel.motion * 6.25 + quiet * 4.0;
+            let target_h = 6.75 - feel.motion * 3.75 + quiet * 2.0;
+            let k = (dt * 1.2).min(1.0);
+            cam.eased_radius += (target_r - cam.eased_radius) * k;
+            cam.eased_height += (target_h - cam.eased_height) * k;
+
+            cam.orbit += dt * 0.06 * feel.motion.max(0.3) * clock.speed;
+            let target = Vec3::new(0.0, 1.5 + beat.energy * 1.5, -6.0);
+            tf.translation = target
+                + Vec3::new(
+                    cam.orbit.cos() * cam.eased_radius,
+                    cam.eased_height,
+                    cam.orbit.sin() * cam.eased_radius,
+                );
             tf.look_at(target, Vec3::Y);
         }
         CameraMode::Explore => {
@@ -841,6 +870,78 @@ pub fn sync_held_ring(
         return;
     };
     material.base_color = crate::theme::TEXT.with_alpha(ring_res.0 * 0.45);
+}
+
+// ---------------------------------------------------------------------------
+// World title — the recipe's name on the horizon
+// ---------------------------------------------------------------------------
+
+/// The world's title text on the horizon. One entity; its colour is the only
+/// per-frame write.
+#[derive(Component)]
+pub struct WorldTitle;
+
+/// Show the world's name as 3D text on the horizon while the intro plays —
+/// the LLM recipe's authored name (mood name as the fallback) — and ease it
+/// out as the first verse arrives. Without measured sections a positional
+/// window (first fifth of the track) stands in.
+pub fn sync_world_title(
+    mut commands: Commands,
+    playback: Res<Playback>,
+    active_recipe: Res<crate::recipe::ActiveRecipe>,
+    theme: Res<Theme>,
+    fonts: Res<crate::theme::Fonts>,
+    mut existing: Query<(Entity, &mut Text2d, &mut TextColor), With<WorldTitle>>,
+) {
+    // The title, capped on a char boundary (the horizon is wide, not endless).
+    let name = match active_recipe
+        .get()
+        .map(|r| r.world_name.trim())
+        .filter(|n| !n.is_empty())
+    {
+        Some(n) if n.chars().count() <= 30 => n.to_string(),
+        Some(n) => {
+            let capped: String = n.chars().take(29).collect();
+            format!("{capped}…")
+        }
+        None => theme.current().world_name.to_string(),
+    };
+
+    // Fade profile: in over the first ~2%, hold, then out — anchored to the
+    // measured intro section when there is one.
+    let frac = playback.fraction();
+    let alpha = if playback.sections.len() >= 2 {
+        let intro_end = playback.sections[1];
+        fade_window(frac, 0.02, (intro_end - 0.02).max(0.05), intro_end + 0.04)
+    } else {
+        fade_window(frac, 0.02, 0.10, 0.18)
+    };
+
+    if let Ok((_, mut text, mut color)) = existing.single_mut() {
+        if text.0 != name {
+            *text = Text2d::new(name);
+        }
+        color.0 = crate::theme::TEXT.with_alpha(alpha * 0.55);
+        return;
+    }
+    commands.spawn((
+        WorldTitle,
+        Text2d::new(name),
+        TextFont {
+            font: FontSource::Handle(fonts.display.clone()),
+            font_size: FontSize::Px(34.0),
+            ..default()
+        },
+        TextColor(crate::theme::TEXT.with_alpha(0.0)),
+        Transform::from_xyz(0.0, 8.5, -34.0),
+    ));
+}
+
+/// 0→1 over `[0, in_by]`, held to `hold_until`, back to 0 by `out_by`.
+fn fade_window(f: f32, in_by: f32, hold_until: f32, out_by: f32) -> f32 {
+    let fin = (f / in_by.max(1e-3)).clamp(0.0, 1.0);
+    let fout = 1.0 - ((f - hold_until) / (out_by - hold_until).max(1e-3)).clamp(0.0, 1.0);
+    fin.min(fout).max(0.0)
 }
 
 // --- colour helpers -------------------------------------------------------
