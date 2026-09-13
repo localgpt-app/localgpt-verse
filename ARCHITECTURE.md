@@ -216,6 +216,15 @@ The renderer's post-M7 growth, in one place (PROGRESS.html tracks status):
 - **Perf shape.** Ground cover is one merged vertex-tinted mesh at 4× the
   old density (scatter no longer pays per-entity). Hero/medium glTF tiers
   remain scene-root clones — true instancing is the remaining ceiling.
+- **Embedding-ranked placement (M5→M6).** The CLAP text tower runs at
+  runtime on a background thread (`TextEmbedder` + `sync_asset_embeddings`
+  in `world_assets.rs`), embedding each manifest entry's name. Placement
+  weights medium-tier counts and the hero fallback by
+  `cos(track audio embedding, asset text embedding)`, min-max normalized to
+  [0.4, 1.6] — neutral without either signal, and the first world replants
+  once when embeddings land. Driven by the *audio* side only: CLAP's
+  text↔text direction is off-manifold (measured by
+  `ml::tests::text_embedding_probe`), so recipe prose stays keyword-matched.
 
 ## 10. The LLM tiers (M7, runtime-verified 2026-09)
 

@@ -268,6 +268,10 @@ pub fn mood_for(embedding: &[f32]) -> usize {
 // The model
 // ---------------------------------------------------------------------------
 
+/// Re-exported so ml.rs callers (and tests) keep the short name; the
+/// definition lives in `crate::analysis` (ungated — placement uses it too).
+pub(crate) use crate::analysis::dot_normed;
+
 /// The CLAP audio branch. `None` from `try_load` when the model file is
 /// missing — the caller keeps the rule-based mood (graceful fallback).
 pub struct ClapModel {
@@ -344,6 +348,85 @@ impl ClapModel {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The text tower — asset-selection ranking (PLAN.md M5→M6 hook)
+// ---------------------------------------------------------------------------
+
+/// The CLAP text branch, loaded at runtime for asset selection: short phrases
+/// (asset names/tags, the recipe's `intent` descriptions) embed into the same
+/// 512-d space as the audio tower, so "this landmark is a rain-slick monolith"
+/// ranks "obsidian shard" above "limestone boulder" without a keyword in
+/// common.
+///
+/// `fetch-clap.sh` already pulls `text_model_quantized.onnx` + `tokenizer.json`
+/// (they were fetched for the offline mood-embedding precompute); this is the
+/// first runtime use. Same graceful-degradation contract as [`ClapModel`]:
+/// absent files or a tokenizer failure → `None`, and every caller keeps the
+/// keyword/rule path.
+pub struct TextEmbedder {
+    session: ort::session::Session,
+    tokenizer: tokenizers::Tokenizer,
+}
+
+impl TextEmbedder {
+    /// Load the text branch + tokenizer from `assets/ml/` if present.
+    pub fn try_load() -> Option<Self> {
+        let dir = crate::world_assets::asset_root().join("ml");
+        let model_path = dir.join("text_model_quantized.onnx");
+        let tok_path = dir.join("tokenizer.json");
+        if !model_path.exists() || !tok_path.exists() {
+            warn!(
+                "ml: text tower not found under {} — keyword asset matching (run scripts/fetch-clap.sh)",
+                dir.display()
+            );
+            return None;
+        }
+        let session = ort::session::Session::builder()
+            .ok()?
+            .commit_from_file(&model_path)
+            .map_err(|e| warn!("ml: can't load CLAP text model: {e}"))
+            .ok()?;
+        let tokenizer = tokenizers::Tokenizer::from_file(&tok_path)
+            .map_err(|e| warn!("ml: can't load CLAP tokenizer: {e}"))
+            .ok()?;
+        info!("ml: CLAP text model loaded (asset selection active)");
+        Some(Self { session, tokenizer })
+    }
+
+    /// L2-normed 512-d embedding for a short English phrase. Errors are
+    /// strings so callers can log once and fall back per-asset.
+    pub fn embed(&mut self, text: &str) -> Result<Vec<f32>, String> {
+        const MAX_TOKENS: usize = 77; // CLAP text context
+        let encoding = self
+            .tokenizer
+            .encode(text, true)
+            .map_err(|e| format!("tokenize: {e}"))?;
+        let ids: Vec<i64> = encoding
+            .get_ids()
+            .iter()
+            .take(MAX_TOKENS)
+            .map(|&i| i as i64)
+            .collect();
+        let n = ids.len().max(1);
+        let input_ids = ort::value::Tensor::from_array(([1usize, n], ids))
+            .map_err(|e| format!("input_ids tensor: {e}"))?;
+        // Xenova's export takes input_ids only (no attention_mask input).
+        let outputs = self
+            .session
+            .run(ort::inputs!["input_ids" => input_ids])
+            .map_err(|e| format!("inference: {e}"))?;
+        let (_, flat) = outputs["text_embeds"]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| format!("text_embeds output: {e}"))?;
+        let mut emb = flat.to_vec();
+        let norm = emb.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-9);
+        for v in &mut emb {
+            *v /= norm;
+        }
+        Ok(emb)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,12 +451,16 @@ mod tests {
         // A zero-shot vote is only meaningful if each world is represented once:
         // a missing prompt makes a world unreachable, a duplicate biases toward
         // it. Both are silent without this check.
+        //
+        // The file covers the four *base* quadrants; the extended variants
+        // (Cinder Reach, …) are selected from the base by mean energy in the
+        // analysis worker, not by a text vote — they have no embeddings here.
         let mut voted: Vec<usize> = MOOD_EMBEDS.embeds.iter().map(|(mood, _)| *mood).collect();
         voted.sort_unstable();
-        let expected: Vec<usize> = (0..crate::theme::moods().len()).collect();
+        let expected: Vec<usize> = (0..crate::theme::ASSET_BASE_MOODS).collect();
         assert_eq!(
             voted, expected,
-            "mood_text_embeddings.json does not cover moods() one-to-one"
+            "mood_text_embeddings.json does not cover the base moods one-to-one"
         );
     }
 
@@ -440,6 +527,48 @@ mod tests {
     fn mood_index_in_range() {
         let emb = vec![0.0f32; EMB_DIM];
         assert!(mood_for(&emb) < crate::theme::moods().len());
+    }
+
+    #[test]
+    fn dot_normed_is_cosine_for_unit_vectors() {
+        let a = vec![1.0f32, 0.0, 0.0];
+        let b = vec![0.0f32, 1.0, 0.0];
+        assert_eq!(dot_normed(&a, &a), 1.0);
+        assert_eq!(dot_normed(&a, &b), 0.0);
+        assert_eq!(dot_normed(&a, &[]), 0.0, "mismatched lengths are neutral");
+        let c = vec![0.6f32, 0.8, 0.0];
+        assert!((dot_normed(&a, &c) - 0.6).abs() < 1e-6);
+    }
+
+    /// Manual probe for the text tower (the model files sit under assets/ml
+    /// after fetch-clap.sh): verifies the ONNX I/O names and that semantically
+    /// close phrases rank closer than far ones in the shared space.
+    /// `cargo test --features ml -- --ignored --nocapture text_embedding_probe`
+    #[test]
+    #[ignore = "loads the CLAP text model; run explicitly"]
+    fn text_embedding_probe() {
+        let Some(mut embedder) = TextEmbedder::try_load() else {
+            panic!("no text model — run scripts/fetch-clap.sh");
+        };
+        let ocean = embedder
+            .embed("ocean waves, coral reef, tidal pools")
+            .expect("embed");
+        let neon = embedder
+            .embed("neon city at night, chrome, electric lights")
+            .expect("embed");
+        let coral = embedder.embed("coral branch").expect("embed");
+        let monolith = embedder.embed("dark monolith slab").expect("embed");
+        let oc = dot_normed(&ocean, &coral);
+        let on = dot_normed(&ocean, &monolith);
+        let nc = dot_normed(&neon, &coral);
+        let nn = dot_normed(&neon, &monolith);
+        eprintln!(
+            "ocean→coral {oc:.3} · ocean→monolith {on:.3} · neon→coral {nc:.3} · neon→monolith {nn:.3}"
+        );
+        assert!(
+            oc > on,
+            "ocean should sit closer to coral ({oc:.3}) than to monolith ({on:.3})"
+        );
     }
 
     /// Manual real-track check:

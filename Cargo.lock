@@ -7770,6 +7770,7 @@ dependencies = [
  "serde_json",
  "stem-splitter-core",
  "symphonia",
+ "tokenizers 0.21.4",
  "tokio",
  "walkdir",
 ]

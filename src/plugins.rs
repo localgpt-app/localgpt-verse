@@ -169,6 +169,7 @@ impl Plugin for WorldAssetsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<world_assets::WorldAssets>()
             .init_resource::<world_assets::WorldLayout>()
+            .init_resource::<world_assets::AssetEmbeddings>()
             .add_systems(Startup, world_assets::load_asset_manifest)
             .add_systems(
                 Update,
@@ -180,6 +181,14 @@ impl Plugin for WorldAssetsPlugin {
                 )
                     .run_if(in_state(AppState::InWorld)),
             );
+
+        // M5→M6 (ml feature): lazily embed the manifest's asset texts with
+        // the CLAP text tower so placement can weight by the track embedding.
+        // Runs in every state (onboarding is idle time anyway), a few assets
+        // per frame.
+        #[cfg(feature = "ml")]
+        app.init_resource::<world_assets::TextModelState>()
+            .add_systems(Update, world_assets::sync_asset_embeddings);
     }
 }
 

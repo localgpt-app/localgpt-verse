@@ -216,19 +216,37 @@
       the pause overlay shows the tier — “imagined by Bonsai · agent scene: N parts” — plus
       the agent’s description in quotes.
       <span class="where">src/llm.rs · src/agent.rs · src/agent_types.rs · src/overlays/pause.rs</span></li>
+    <li><b>CLAP-embedding asset selection (the M5→M6 hook).</b> The text tower now runs at
+      runtime (<code>TextEmbedder</code>, background thread — it was fetched but unused
+      before) and embeds all 52 asset names; placement weights medium-tier counts and the
+      hero fallback by cosine(track audio embedding, asset text embedding), min-max
+      normalized to [0.4, 1.6] — an oceanic song favours coral assets. Neutral 1.0 without
+      either signal (no-model path is byte-identical to before). Placement re-runs once
+      when embeddings first land. Also fixed the 8-mood regression: the CLAP vote covers
+      the four base quadrants, and the worker folds mean energy into the variant.
+      <span class="where">src/ml.rs · src/world_assets.rs · src/analysis.rs · src/plugins.rs</span></li>
   </ul>
+  <p class="note">Design note: asset ranking is driven by the track’s <em>audio</em>
+     embedding only. The probe measured CLAP text↔text similarity as off-manifold
+     (ocean→coral 0.18 &lt; ocean→monolith 0.22 — noise) — the model is trained
+     audio↔text, so recipe “intent” prose stays on the keyword path. Probe:
+     <code>ml::tests::text_embedding_probe</code>. One rough edge found in <code>--features ml</code>
+     runs: <code>stem-splitter-core</code>’s Demucs model fetch can panic on a background
+     thread when the model is unavailable; the app survives it (tier stays off) — upstream
+     issue to report, not ours to fix in-tree.</p>
 
   <h2>Backlog — what remains</h2>
   <table>
     <tr><th></th><th>Item</th><th>Who</th><th>Notes</th></tr>
     <tr>
       <td class="pri"><span class="pill p2">P2</span></td>
-      <td><b>Embedding-based asset selection.</b> The CLAP 512-d embedding is stored per
-          track but unused; landmarks still match by name keywords. Match
-          landmark/biome intent to asset tags in the shared text space (needs the CLAP text
-          tower; keywords stay the no-model fallback).</td>
-      <td><span class="pill p2">Claude</span></td>
-      <td>Rides the <code>ml</code> feature; PLAN.md M5→M6 hook.</td>
+      <td><b><s>Embedding-based asset selection.</s></b> <em>Shipped 2026-09-13</em> (track
+          audio embedding ranks the manifest; keywords stay the no-model fallback).
+          Remaining if ever wanted: manifest <code>tags</code> from a
+          <code>reverie-assets</code> regen would sharpen the text descriptions the ranker
+          embeds.</td>
+      <td><span class="pill p2">done</span></td>
+      <td>Runtime-verified: 52 assets embedded on a background thread, placement re-runs once on fill.</td>
     </tr>
     <tr>
       <td class="pri"><span class="pill p2">P2</span></td>

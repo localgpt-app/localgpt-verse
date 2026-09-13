@@ -247,6 +247,17 @@ attribution already wired through the manifest → Credits screen.
 >   polish**: inventive-name prompt, agent wrap-up nudge, `at_role`
 >   section-scoped agent placements, tier status + agent description in the
 >   pause overlay.
+> - **The M5→M6 hook landed (2026-09-13):** the CLAP text tower now runs at
+>   runtime (`TextEmbedder`, background thread) and embeds the manifest;
+>   placement weights medium counts + hero fallback by
+>   cosine(track audio embed, asset text embed) ([0.4, 1.6], neutral without
+>   either signal). Measured caveat: CLAP text↔text similarity is
+>   off-manifold (probe: `ml::tests::text_embedding_probe`), so recipe prose
+>   stays keyword-matched and only the track's *audio* embedding ranks.
+>   CLAP's mood vote covers the base quadrants; the worker folds mean energy
+>   into the variant. Known rough edge: `stem-splitter-core` can panic on a
+>   background thread when its model can't be fetched — the tier survives
+>   off; report upstream.
 
 
 **M1 — Real playback core.**

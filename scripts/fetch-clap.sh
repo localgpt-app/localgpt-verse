@@ -7,8 +7,10 @@
 # see PLAN.md §4 ("CLAP checkpoint license") and verify before shipping.
 # The app runs fine without these files (falls back to the rule mapper).
 #
-# Runtime needs only the audio model + mood_text_embeddings.json; the text
-# model + tokenizer are used once, offline, by precompute_text_embeddings.py.
+# Runtime needs the audio model (moods + track embeddings) and, since the
+# M5→M6 asset-selection hook landed, the text model + tokenizer too — the
+# text tower runs at runtime on a background thread to embed the asset
+# manifest for track-driven placement ranking.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

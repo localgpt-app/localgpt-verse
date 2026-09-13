@@ -45,6 +45,17 @@ const SIDECAR_VERSION: u32 = 2;
 /// Reference loudness for playback normalization (streaming/broadcast norm).
 pub const TARGET_LUFS: f32 = -14.0;
 
+/// Cosine similarity of two L2-normed vectors (a dot product). Shared by the
+/// CLAP zero-shot mood vote (ml) and the embedding-weighted asset placement —
+/// lives here, ungated, so placement compiles in every feature config.
+/// NaN-safe: a mismatched or empty pair scores 0 (neutral).
+pub(crate) fn dot_normed(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+}
+
 /// One track's analysis, serialized as a JSON sidecar.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackAnalysis {
@@ -779,6 +790,10 @@ impl AnalysisStore {
                 // the zero-shot mood) even if rules analyzed it earlier.
                 // The `embedding.is_none()` test comes first so a track that
                 // already has one never triggers the 78 MB load.
+                //
+                // CLAP votes among the four base quadrants; the extended
+                // variants are the same quadrant split by mean energy (the
+                // mapper's third axis), folded in here so both mappers agree.
                 #[cfg(feature = "ml")]
                 let analysis = if analysis.embedding.is_none()
                     && let Some(model) = clap.get_or_load(crate::ml::ClapModel::try_load)
@@ -787,7 +802,8 @@ impl AnalysisStore {
                         Some((embedding, mood)) => {
                             info!("CLAP embedded {} → mood {mood}", path.display());
                             let mut a = analysis;
-                            a.set_mood(mood);
+                            let variant = mood_variant(mood, mean_energy_of(&a));
+                            a.set_mood(variant);
                             a.embedding = Some(embedding);
                             save_sidecar(&id, &a);
                             a
@@ -1127,7 +1143,7 @@ pub fn sync_analysis(
             // neighbourhood). Distances use the same axes/thresholds as
             // `map_mood` so the blend is the mapper's own uncertainty.
             timbre.0 = (a.centroid_hz.unwrap_or(1250.0) / 2500.0).clamp(0.0, 1.0);
-            let mean_energy = a.energy.iter().sum::<f32>() / a.energy.len().max(1) as f32;
+            let mean_energy = mean_energy_of(a);
             let tempo_norm = ((a.bpm - 70.0) / 90.0).clamp(0.0, 1.0);
             let arousal = 0.6 * tempo_norm + 0.4 * mean_energy;
             let base = mood % crate::theme::ASSET_BASE_MOODS;
@@ -1221,6 +1237,23 @@ fn resolve_section_moments(
         out.push((idx, m.clone()));
     }
     out
+}
+
+/// Mean of the per-second energy curve (0.0 when empty).
+fn mean_energy_of(a: &TrackAnalysis) -> f32 {
+    a.energy.iter().sum::<f32>() / a.energy.len().max(1) as f32
+}
+
+/// The CLAP zero-shot vote lands on a base quadrant; the extended variant of
+/// the same neighbourhood applies when the track's energy is restrained —
+/// the mapper's third axis (`map_mood`'s `mean_energy > 0.5`), so the rule
+/// and CLAP paths resolve to the same eight worlds.
+fn mood_variant(base: usize, mean_energy: f32) -> usize {
+    if mean_energy <= 0.5 {
+        (base % crate::theme::ASSET_BASE_MOODS) + crate::theme::ASSET_BASE_MOODS
+    } else {
+        base % crate::theme::ASSET_BASE_MOODS
+    }
 }
 
 /// Per-stem level 0..1 at `t` seconds (`[drums, bass, vocals, other]`). A
@@ -1451,6 +1484,15 @@ mod tests {
         );
         assert_eq!(out.len(), 1, "second moment has nowhere to land");
         assert_eq!(out[0].0, 0);
+    }
+
+    #[test]
+    fn mood_variant_splits_base_by_energy() {
+        assert_eq!(mood_variant(1, 0.8), 1, "assertive stays the base quadrant");
+        assert_eq!(mood_variant(1, 0.3), 5, "restrained lands in the variant");
+        assert_eq!(mood_variant(2, 0.3), 6);
+        // Out-of-range bases (a manifest grown past 4) degrade to base range.
+        assert_eq!(mood_variant(9, 0.8), 1);
     }
 
     #[test]

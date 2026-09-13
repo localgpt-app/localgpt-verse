@@ -59,7 +59,7 @@ opt-level = 3
 # --no-default-features so the coreml/cuda/directml backends stay off (CPU-only,
 # matching the existing `ort` default).
 [features]
-ml = ["dep:ort", "dep:rubato", "dep:stem-splitter-core"]
+ml = ["dep:ort", "dep:rubato", "dep:stem-splitter-core", "dep:tokenizers"]
 # PLAN.md M7 — LLM-authored scene recipes (src/recipe.rs, src/llm.rs). Opt-in:
 # `mistralrs` builds a pure-Rust inference engine (CUDA/Metal via its own
 # optional features, off by default), and the GGUF model is a separate ~4–5 GB
@@ -92,6 +92,14 @@ optional = true
 [dependencies.stem-splitter-core]
 version = "1.2"
 default-features = false
+optional = true
+
+# RoBERTa tokenizer for the CLAP *text* tower (asset-selection ranking,
+# M5→M6 hook). HF `tokenizers` (pure Rust); only compiled under `ml`.
+[dependencies.tokenizers]
+version = "0.21"
+default-features = false
+features = ["fancy-regex"]
 optional = true
 
 [dependencies.mistralrs]

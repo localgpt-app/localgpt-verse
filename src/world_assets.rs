@@ -12,6 +12,7 @@ use bevy::camera::visibility::VisibilityRange;
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 use crate::theme::{Arrangement, Theme};
 
@@ -150,6 +151,92 @@ pub struct AssetManifest {
 #[derive(Resource, Default)]
 pub struct WorldAssets {
     pub manifest: Option<AssetManifest>,
+}
+
+/// Per-asset CLAP text embeddings — the M5→M6 asset-selection hook (PLAN.md).
+/// Filled in the background by `sync_asset_embeddings` (ml feature): each
+/// asset's text (`"{name}, {tier_label}"`) embeds into the same 512-d space
+/// as the track embeddings, so a song whose audio sits near "coral" favours
+/// coral assets. Placement re-runs once when the first embeddings land, so
+/// the opening world upgrades instead of staying neutral until track two.
+///
+/// Ungated (a plain map) so placement code compiles in every feature config:
+/// an empty map means neutral weights — the no-model path is exactly today's
+/// behaviour. Deliberately track-*audio*-driven: CLAP's trained alignment is
+/// audio↔text; text↔text similarity on this model is off-manifold (probe:
+/// `ml::tests::text_embedding_probe`), so recipe `intent` strings stay on the
+/// keyword path and only the track embedding ranks here.
+#[derive(Resource, Default)]
+pub struct AssetEmbeddings {
+    pub map: HashMap<String, Vec<f32>>,
+}
+
+/// The lazy text-tower state behind [`AssetEmbeddings`] (ml feature only).
+/// The CLAP text tower is far too slow for the main thread (a forward pass
+/// per asset would stall frames), so embedding runs on a dedicated std
+/// thread: the system spawns it once, then drains finished results into
+/// [`AssetEmbeddings`] a few per frame. A missing model logs once and the
+/// keyword path stands.
+#[cfg(feature = "ml")]
+#[derive(Resource, Default)]
+pub struct TextModelState {
+    /// Written by the background thread, drained into [`AssetEmbeddings`].
+    shared: std::sync::Arc<std::sync::Mutex<HashMap<String, Vec<f32>>>>,
+    /// Whether the fill thread has been spawned (once per manifest).
+    started: bool,
+}
+
+/// Spawn the background fill once (first call with a manifest), then drain
+/// finished asset embeddings into [`AssetEmbeddings`]. Never blocks a frame.
+#[cfg(feature = "ml")]
+pub fn sync_asset_embeddings(
+    assets: Res<WorldAssets>,
+    mut state: ResMut<TextModelState>,
+    mut embeddings: ResMut<AssetEmbeddings>,
+) {
+    if !state.started {
+        let Some(manifest) = &assets.manifest else {
+            return;
+        };
+        state.started = true;
+        let shared = state.shared.clone();
+        let texts: Vec<(String, String)> = manifest
+            .assets
+            .iter()
+            .map(|a| (a.file.clone(), format!("{}, {}", a.name, a.tier_label())))
+            .collect();
+        std::thread::spawn(move || {
+            let Some(mut model) = crate::ml::TextEmbedder::try_load() else {
+                return; // keyword matching stands; nothing more to do
+            };
+            let mut done = 0usize;
+            for (file, text) in texts {
+                match model.embed(&text) {
+                    Ok(emb) => {
+                        shared.lock().unwrap().insert(file, emb);
+                        done += 1;
+                    }
+                    Err(e) => warn!("ml: asset embed failed for {file}: {e}"),
+                }
+            }
+            info!("ml: embedded {done} assets for track-driven placement");
+        });
+    }
+    // Drain what the thread has finished so far.
+    let drained: Vec<(String, Vec<f32>)> = {
+        let mut shared = state.shared.lock().unwrap();
+        let keys: Vec<String> = shared
+            .keys()
+            .filter(|k| !embeddings.map.contains_key(*k))
+            .cloned()
+            .collect();
+        keys.into_iter()
+            .filter_map(|k| shared.remove(&k).map(|v| (k, v)))
+            .collect()
+    };
+    for (k, v) in drained {
+        embeddings.map.insert(k, v);
+    }
 }
 
 /// The current world layout seed. Same (mood, seed) → same placement; "Build
@@ -540,11 +627,12 @@ fn scatter_base_handle(arrangement: Arrangement, meshes: &mut Assets<Mesh>) -> H
 /// materialize sequence that settles on the current track's first downbeat
 /// (when its analysis is already in — the next track is prefetched, so the
 /// crossfade case normally has it).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn populate_world_props(
     theme: Res<Theme>,
     layout: Res<WorldLayout>,
     assets: Res<WorldAssets>,
+    embeddings: Res<AssetEmbeddings>,
     active_recipe: Res<crate::recipe::ActiveRecipe>,
     asset_server: Res<AssetServer>,
     analysis: Res<crate::analysis::AnalysisStore>,
@@ -553,7 +641,7 @@ pub fn populate_world_props(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
     existing: Query<Entity, With<WorldProp>>,
-    mut last: Local<Option<(usize, u64, Option<String>)>>,
+    mut last: Local<Option<(usize, u64, Option<String>, bool)>>,
 ) {
     let mood = theme.mood % crate::theme::moods().len();
     let recipe = active_recipe.get();
@@ -565,10 +653,13 @@ pub fn populate_world_props(
         .map(|b| b.layout.arrangement())
         .unwrap_or(crate::theme::moods()[mood].arrangement);
     let recipe_key = recipe.map(|r| r.world_name.clone());
-    if *last == Some((mood, layout.seed, recipe_key.clone())) {
+    // Re-run once when the first asset embeddings land, so the opening world
+    // upgrades from neutral weights instead of waiting for the next track.
+    let embedded = !embeddings.map.is_empty();
+    if *last == Some((mood, layout.seed, recipe_key.clone(), embedded)) {
         return;
     }
-    *last = Some((mood, layout.seed, recipe_key));
+    *last = Some((mood, layout.seed, recipe_key, embedded));
 
     for e in &existing {
         commands.entity(e).despawn();
@@ -633,8 +724,23 @@ pub fn populate_world_props(
             .filter(|a| a.mood_index() == base)
             .collect();
     }
-    for entry in &entries {
-        let count = (entry.tier.count() as f32 * density).round().max(1.0) as usize;
+    // Track-embedding asset weights (M5→M6): mediums get weighted counts, so
+    // a track that sounds oceanic favours coral over concrete. Neutral when
+    // the track has no embedding or the manifest hasn't been embedded.
+    let track_emb = current_id
+        .as_deref()
+        .and_then(|id| analysis.get(id))
+        .and_then(|a| a.embedding.as_deref());
+    let weights = embedding_weights(&entries, track_emb, &embeddings);
+    for (entry, weight) in entries.iter().zip(&weights) {
+        let weighted = if entry.tier == Tier::Medium {
+            *weight
+        } else {
+            1.0
+        };
+        let count = (entry.tier.count() as f32 * density * weighted)
+            .round()
+            .max(1.0) as usize;
         for _ in 0..count {
             if entry.tier == Tier::Scatter {
                 scatter_pts.push(layout_position(arrangement, placed, &mut rng));
@@ -710,7 +816,18 @@ pub fn populate_world_props(
             .collect();
         let mut used: Vec<String> = Vec::new();
         for (i, landmark) in recipe.landmarks.iter().enumerate() {
-            let Some(entry) = pick_hero_for_kind(&heroes, landmark.kind, &mut used) else {
+            let score = |e: &AssetEntry| {
+                track_emb
+                    .and_then(|q| {
+                        embeddings
+                            .map
+                            .get(&e.file)
+                            .map(|a| crate::analysis::dot_normed(q, a))
+                    })
+                    .unwrap_or(0.0)
+            };
+            let Some(entry) = pick_hero_for_kind(&heroes, landmark.kind, &mut used, Some(&score))
+            else {
                 break;
             };
             plan.push(PlannedProp {
@@ -949,6 +1066,7 @@ fn pick_hero_for_kind<'a>(
     heroes: &[&'a AssetEntry],
     kind: crate::recipe::LandmarkKind,
     used: &mut Vec<String>,
+    score: Option<&dyn Fn(&AssetEntry) -> f32>,
 ) -> Option<&'a AssetEntry> {
     use crate::recipe::LandmarkKind;
     let keywords: &[&str] = match kind {
@@ -984,12 +1102,70 @@ fn pick_hero_for_kind<'a>(
             used.push(e.file.clone());
             e
         })
-        // Fallback: unused hero in manifest order (the old round-robin).
+        // Fallback: the unused hero the *track* best matches (CLAP embedding,
+        // when the manifest has been embedded), else manifest order.
         .or_else(|| {
-            let e = heroes.iter().find(|e| !used.contains(&e.file)).copied()?;
-            used.push(e.file.clone());
-            Some(e)
+            let fallback = match score {
+                Some(s) => heroes
+                    .iter()
+                    .filter(|e| !used.contains(&e.file))
+                    .max_by(|a, b| s(a).partial_cmp(&s(b)).unwrap_or(std::cmp::Ordering::Equal))
+                    .copied(),
+                None => heroes.iter().find(|e| !used.contains(&e.file)).copied(),
+            }?;
+            used.push(fallback.file.clone());
+            Some(fallback)
         })
+}
+
+/// Per-entry placement weights from the track's audio embedding against the
+/// assets' text embeddings: min-max normalized within the pool, scaled to
+/// [0.4, 1.6] so totals roughly hold while *which* assets dominate shifts
+/// with the song. Neutral (all 1.0) without a track embedding or any asset
+/// coverage — the no-model path is today's behaviour.
+///
+/// Deliberately driven by the *track's audio* embedding only: CLAP's trained
+/// alignment is audio↔text (text↔text similarity on this model is
+/// off-manifold — `ml::tests::text_embedding_probe`), so recipe prose stays
+/// on the keyword path and the song itself picks the flavour.
+fn embedding_weights(
+    entries: &[&AssetEntry],
+    track_emb: Option<&[f32]>,
+    embeddings: &AssetEmbeddings,
+) -> Vec<f32> {
+    let Some(query) = track_emb else {
+        return vec![1.0; entries.len()];
+    };
+    let raw: Vec<f32> = entries
+        .iter()
+        .map(|e| {
+            embeddings
+                .map
+                .get(&e.file)
+                .map(|a| crate::analysis::dot_normed(query, a))
+                .unwrap_or(f32::NAN) // unembedded entries are neutral
+        })
+        .collect();
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    let mut covered = false;
+    for c in raw.iter().filter(|c| c.is_finite()) {
+        lo = lo.min(*c);
+        hi = hi.max(*c);
+        covered = true;
+    }
+    if !covered {
+        return vec![1.0; entries.len()];
+    }
+    let span = (hi - lo).max(1e-6);
+    raw.iter()
+        .map(|c| {
+            if c.is_finite() {
+                0.4 + 1.2 * (*c - lo) / span
+            } else {
+                1.0
+            }
+        })
+        .collect()
 }
 
 /// World position for a landmark anchor. Cardinal rotates around the rim by
@@ -1132,6 +1308,107 @@ pub fn stress_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entry(file: &str, name: &str, tier: Tier) -> AssetEntry {
+        AssetEntry {
+            id: file.into(),
+            name: name.into(),
+            file: file.into(),
+            tier,
+            mood: 0,
+            mood_id: None,
+            scale: 1.0,
+            dims: None,
+            license: "CC0".into(),
+            author: "test".into(),
+            source: "test".into(),
+        }
+    }
+
+    #[test]
+    fn hero_fallback_prefers_the_track_scored_hero() {
+        // Names deliberately free of Gateway keywords, so the keyword path
+        // finds nothing and the fallback decides.
+        let heroes: Vec<AssetEntry> = vec![
+            entry("a.glb", "Granite Slab", Tier::Hero),
+            entry("b.glb", "Basalt Shelf", Tier::Hero),
+        ];
+        let refs: Vec<&AssetEntry> = heroes.iter().collect();
+        let mut used = Vec::new();
+        // The score closure says the track favours the basalt shelf.
+        let score = |e: &AssetEntry| if e.file == "b.glb" { 1.0 } else { 0.0 };
+        let picked = pick_hero_for_kind(
+            &refs,
+            crate::recipe::LandmarkKind::Gateway,
+            &mut used,
+            Some(&score),
+        )
+        .expect("a hero is picked");
+        assert_eq!(picked.file, "b.glb");
+        // …and without scores the same call takes manifest order (determinism).
+        let mut used = Vec::new();
+        let picked =
+            pick_hero_for_kind(&refs, crate::recipe::LandmarkKind::Gateway, &mut used, None)
+                .unwrap();
+        assert_eq!(picked.file, "a.glb");
+    }
+
+    #[test]
+    fn keyword_match_still_beats_embedding_order() {
+        // A monolith query should not rerank a real "tower" keyword hit.
+        let heroes: Vec<AssetEntry> = vec![
+            entry("a.glb", "Coral Arch", Tier::Hero),
+            entry("b.glb", "Clock Tower", Tier::Hero),
+        ];
+        let refs: Vec<&AssetEntry> = heroes.iter().collect();
+        let mut used = Vec::new();
+        let score = |e: &AssetEntry| if e.file == "a.glb" { 1.0 } else { 0.0 };
+        let picked = pick_hero_for_kind(
+            &refs,
+            crate::recipe::LandmarkKind::Spire,
+            &mut used,
+            Some(&score),
+        )
+        .unwrap();
+        assert_eq!(picked.file, "b.glb", "keyword match wins over embeddings");
+    }
+
+    #[test]
+    fn embedding_weights_are_neutral_without_signals() {
+        let entries: Vec<AssetEntry> = vec![
+            entry("a.glb", "A", Tier::Medium),
+            entry("b.glb", "B", Tier::Medium),
+        ];
+        let refs: Vec<&AssetEntry> = entries.iter().collect();
+        let empty = AssetEmbeddings::default();
+        assert_eq!(embedding_weights(&refs, None, &empty), vec![1.0, 1.0]);
+        // A track embedding with no asset coverage is also neutral.
+        let query = vec![1.0f32; 4];
+        assert_eq!(
+            embedding_weights(&refs, Some(&query), &empty),
+            vec![1.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn embedding_weights_rank_and_bound() {
+        let entries: Vec<AssetEntry> = vec![
+            entry("a.glb", "A", Tier::Medium),
+            entry("b.glb", "B", Tier::Medium),
+            entry("c.glb", "C", Tier::Medium), // unembedded → neutral
+        ];
+        let refs: Vec<&AssetEntry> = entries.iter().collect();
+        let mut embeddings = AssetEmbeddings::default();
+        embeddings.map.insert("a.glb".into(), vec![1.0, 0.0]);
+        embeddings.map.insert("b.glb".into(), vec![0.0, 1.0]);
+        let query = vec![1.0f32, 0.0];
+        let w = embedding_weights(&refs, Some(&query), &embeddings);
+        assert!((w[0] - 1.6).abs() < 1e-6, "best match gets the top weight");
+        assert!((w[1] - 0.4).abs() < 1e-6, "worst match the floor");
+        assert_eq!(w[2], 1.0, "uncovered assets stay neutral");
+        // Deterministic: same inputs, same weights.
+        assert_eq!(w, embedding_weights(&refs, Some(&query), &embeddings));
+    }
 
     #[test]
     fn stagger_ends_on_settle_and_orders() {
