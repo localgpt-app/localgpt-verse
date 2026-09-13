@@ -531,6 +531,12 @@ pub struct TapShared {
     energy: AtomicU32,
     /// Onset impulse latch; the app consumes (zeroes) it.
     pulse: AtomicU32,
+    /// Bass-band level 0..1 (absolute fast RMS of the low-passed signal) —
+    /// feeds the bass-reactive world layers.
+    bass: AtomicU32,
+    /// High-band loudness 0..1 ("sparkle", fast over slow RMS above ~3.5 kHz)
+    /// — drives the particle field's emissive breathing.
+    highs: AtomicU32,
 }
 
 impl TapShared {
@@ -551,10 +557,13 @@ impl EffectBuilder for TapBuilder {
             Box::new(TapEffect {
                 shared: self.0,
                 lp: 0.0,
+                lp_all: 0.0,
                 sq_fast: 0.0,
                 sq_slow: 0.0,
                 low_fast: 0.0,
                 low_slow: 0.0,
+                hi_fast: 0.0,
+                hi_slow: 0.0,
                 cooldown: 0.0,
                 pulse_latch: 0.0,
             }),
@@ -567,12 +576,17 @@ struct TapEffect {
     shared: Arc<TapShared>,
     /// One-pole low-pass state (~120 Hz) isolating the bass band.
     lp: f32,
+    /// One-pole low-pass state (~3.5 kHz) whose complement is the high band.
+    lp_all: f32,
     /// Fast/slow mean-square envelopes of the full signal (~25ms / ~1.2s).
     sq_fast: f32,
     sq_slow: f32,
     /// Fast/slow envelopes of the bass band (~15ms / ~700ms).
     low_fast: f32,
     low_slow: f32,
+    /// Fast/slow envelopes of the high band (~25ms / ~0.6s).
+    hi_fast: f32,
+    hi_slow: f32,
     /// Seconds until another onset may fire (debounce).
     cooldown: f32,
     pulse_latch: f32,
@@ -591,18 +605,26 @@ impl Effect for TapEffect {
         let k_slow = one_pole(dt, 1.2);
         let k_lfast = one_pole(dt, 0.015);
         let k_lslow = one_pole(dt, 0.7);
+        let k_hslow = one_pole(dt, 0.6);
+        let k_all = one_pole(dt, 1.0 / (2.0 * std::f32::consts::PI * 3500.0));
 
         for frame in input.iter() {
             let mono = (frame.left + frame.right) * 0.5;
-            // Bass band via one-pole low-pass.
+            // Bass band via one-pole low-pass; high band via its ~3.5 kHz
+            // complement (mono − lowpassed).
             self.lp += k_lp * (mono - self.lp);
+            self.lp_all += k_all * (mono - self.lp_all);
             let low_sq = self.lp * self.lp;
+            let high = mono - self.lp_all;
+            let high_sq = high * high;
             let sq = mono * mono;
 
             self.sq_fast += k_fast * (sq - self.sq_fast);
             self.sq_slow += k_slow * (sq - self.sq_slow);
             self.low_fast += k_lfast * (low_sq - self.low_fast);
             self.low_slow += k_lslow * (low_sq - self.low_slow);
+            self.hi_fast += k_fast * (high_sq - self.hi_fast);
+            self.hi_slow += k_hslow * (high_sq - self.hi_slow);
 
             self.cooldown = (self.cooldown - dt).max(0.0);
             // Onset: the bass envelope jumps well above its running average.
@@ -618,7 +640,17 @@ impl Effect for TapEffect {
         } else {
             0.0
         };
+        // Absolute-ish bass level (RMS of the isolated band), scaled into
+        // 0..1 for typical mastered loudness.
+        let bass = (self.low_fast.max(0.0).sqrt() * 3.0).clamp(0.0, 1.0);
+        let highs = if self.hi_slow > 1e-8 {
+            ((self.hi_fast / (self.hi_slow * 2.5)).sqrt()).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         TapShared::store(&self.shared.energy, energy);
+        TapShared::store(&self.shared.bass, bass);
+        TapShared::store(&self.shared.highs, highs);
         if self.pulse_latch > 0.0 {
             TapShared::store(&self.shared.pulse, self.pulse_latch);
             self.pulse_latch = 0.0;
@@ -642,6 +674,12 @@ pub fn update_beat_from_tap(
     let target = TapShared::load(&tap.0.energy);
     let k = (time.delta_secs() * 8.0).min(1.0);
     beat.energy = (beat.energy + (target - beat.energy) * k).clamp(0.0, 1.0);
+    // Same for the band envelopes (a touch faster — they carry rhythm).
+    let kb = (time.delta_secs() * 10.0).min(1.0);
+    let bass = TapShared::load(&tap.0.bass);
+    let highs = TapShared::load(&tap.0.highs);
+    beat.bass = (beat.bass + (bass - beat.bass) * kb).clamp(0.0, 1.0);
+    beat.highs = (beat.highs + (highs - beat.highs) * kb).clamp(0.0, 1.0);
 
     // Consume the onset latch.
     let latch = TapShared::load(&tap.0.pulse);

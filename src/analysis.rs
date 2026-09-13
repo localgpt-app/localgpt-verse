@@ -940,6 +940,12 @@ impl AnalysisStore {
             .map(|a| a.beat_offset)
     }
 
+    /// The track's Demucs stem curves, when the `ml` separation pass ran.
+    /// `[drums, bass, vocals, other]`, per-second, aligned to `energy`.
+    pub fn stems_for(&self, id: &str) -> Option<&crate::demucs::StemEnergy> {
+        self.map.get(id).and_then(|a| a.stems.as_ref())
+    }
+
     /// Normalization gain in **decibels** for `id` toward [`TARGET_LUFS`],
     /// clamped to ±12 dB so a mismeasured quiet track can't blast. `0.0` (no
     /// change) when the track isn't analyzed yet or loudness was unmeasurable.
@@ -1151,6 +1157,44 @@ fn resolve_section_moments(
     out
 }
 
+/// Per-stem level 0..1 at `t` seconds (`[drums, bass, vocals, other]`). A
+/// curve shorter than the playhead holds its last value — a truncated
+/// analysis, not silence; an empty curve reads as 0.
+pub(crate) fn sample_stems(stems: &crate::demucs::StemEnergy, t: f32) -> [f32; 4] {
+    let mut out = [0.0f32; 4];
+    for (slot, curve) in out.iter_mut().zip(stems.iter()) {
+        if !curve.is_empty() {
+            let idx = (t.max(0.0).floor() as usize).min(curve.len() - 1);
+            *slot = curve[idx].clamp(0.0, 1.0);
+        }
+    }
+    out
+}
+
+/// Sample the current track's Demucs stem curves at the playhead into
+/// [`crate::playback::StemLevels`], one-pole smoothed so the per-second
+/// resolution doesn't step. Without stems (no `ml` feature, or a sidecar
+/// written without them) the levels ease to zero and consumers fall back to
+/// the live-tap band envelopes.
+pub fn update_stem_levels(
+    store: Res<AnalysisStore>,
+    playback: Res<Playback>,
+    time: Res<Time>,
+    mut levels: ResMut<crate::playback::StemLevels>,
+) {
+    let target = playback
+        .queue
+        .get(playback.current % playback.queue.len().max(1))
+        .and_then(|t| t.id.as_deref())
+        .and_then(|id| store.stems_for(id))
+        .map(|s| sample_stems(s, playback.elapsed))
+        .unwrap_or([0.0; 4]);
+    let k = (time.delta_secs() * 6.0).min(1.0);
+    for (level, t) in levels.0.iter_mut().zip(target) {
+        *level += (t - *level) * k;
+    }
+}
+
 /// Mean energy of segment `i` (the fraction window between boundary `i` and
 /// `i+1`), from the per-second energy curve. 0.0 when the curve is empty.
 fn segment_energy(analysis: &TrackAnalysis, i: usize) -> f32 {
@@ -1321,6 +1365,25 @@ mod tests {
         );
         assert_eq!(out.len(), 1, "second moment has nowhere to land");
         assert_eq!(out[0].0, 0);
+    }
+
+    #[test]
+    fn stems_sample_by_second_and_hold_their_last_value() {
+        let stems = [vec![0.1, 0.9], vec![], vec![0.5; 200], vec![0.0, 0.7]];
+        let at = |t: f32| sample_stems(&stems, t);
+        assert_eq!(at(0.0), [0.1, 0.0, 0.5, 0.0], "floor(t) indexes each curve");
+        assert_eq!(at(1.4), [0.9, 0.0, 0.5, 0.7]);
+        // Past the end of a short curve: hold last, not silence.
+        assert_eq!(at(9.9), [0.9, 0.0, 0.5, 0.7]);
+        // Negative time (seek before 0) reads the first value.
+        assert_eq!(at(-3.0)[0], 0.1);
+    }
+
+    #[test]
+    fn stems_sample_clamps_out_of_range_values() {
+        let stems = [vec![2.0, -1.0], vec![0.0; 3], vec![0.0; 3], vec![0.0; 3]];
+        assert_eq!(sample_stems(&stems, 0.0)[0], 1.0);
+        assert_eq!(sample_stems(&stems, 1.0)[0], 0.0);
     }
 
     #[test]

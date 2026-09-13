@@ -161,7 +161,89 @@
     </ol>
   </div>
 
-  <h2>Backlog — what to do next</h2>
+  <h2>Shipped — world interestingness, round 1 (stem + band reactivity)</h2>
+  <ul class="clean">
+    <li><b>The world now listens per frequency range, not as one loudness.</b> The live tap
+      publishes <code>bass</code>/<code>highs</code> band envelopes alongside energy/pulse;
+      the Demucs stem curves cached in sidecars are sampled at the playhead into a
+      <code>StemLevels</code> resource (stem value wins, live band stands in when absent).
+      Bass swells the drifters’ sway, the “other” stem quickens their spin, drums accent
+      the beat glow and breathe the landmark beacons, vocals widen particle wander, and
+      the live high band breathes the particle field’s emissive — all Comfort-gated
+      (reduce-flashing holds brightness steady; motion reactivity halves instead).
+      <span class="where">src/audio.rs · src/playback.rs · src/analysis.rs · src/world.rs · src/world_assets.rs</span></li>
+  </ul>
+
+  <h2>Backlog — world interestingness (ranked)</h2>
+  <table>
+    <tr><th></th><th>Item</th><th>Who</th><th>Notes</th></tr>
+    <tr>
+      <td class="pri"><span class="pill p1">P1</span></td>
+      <td><b>The skyline is the waveform.</b> Rim landmark heights sampled from the energy
+          curve — walk the world’s edge and you read the song’s structure. Deterministic,
+          cheap, high-concept.</td>
+      <td><span class="pill p2">Claude</span></td>
+      <td>Reuses placement machinery.</td>
+    </tr>
+    <tr>
+      <td class="pri"><span class="pill p1">P1</span></td>
+      <td><b>Materialize across the whole song.</b> Props currently all rise in the first
+          ~2.4 s; spread tiers over sections (scatter in the intro, heroes landing exactly
+          on the chorus) so the world grows with the track. <code>stagger_delay</code>
+          already exists — it needs section-anchored delays.</td>
+      <td><span class="pill p2">Claude</span></td>
+      <td>Directly uses the section data already resolved.</td>
+    </tr>
+    <tr>
+      <td class="pri"><span class="pill p1">P1</span></td>
+      <td><b>Per-section structural events.</b> Choreography currently shifts
+          energy/motion/palette; give moments verbs — chorus raises beacon intensity,
+          bridge strips particles, outro sinks scatter props.</td>
+      <td><span class="pill p2">Claude</span></td>
+      <td>Extends <code>sync_section_moment</code>.</td>
+    </tr>
+    <tr>
+      <td class="pri"><span class="pill p2">P2</span></td>
+      <td><b>Spectral-centroid hue + continuous mood blending.</b> Centroid is computed
+          then discarded — a continuous hue shift within the mood palette; CLAP embedding →
+          valence/arousal → interpolate adjacent mood palettes so two “Tide Gardens”
+          songs stop looking identical.</td>
+      <td><span class="pill p2">Claude</span></td>
+      <td><code>Palette::mix</code> exists.</td>
+    </tr>
+    <tr>
+      <td class="pri"><span class="pill p2">P2</span></td>
+      <td><b>LLM: per-section sub-recipes + agent timing.</b> N small recipes (faster and
+          more synced than one monolith) and an optional <code>at_role</code> on agent
+          commands so its structures rise on the drop / vanish for the bridge.</td>
+      <td><span class="pill p2">Claude</span></td>
+      <td>Schema + replay changes.</td>
+    </tr>
+    <tr>
+      <td class="pri"><span class="pill p2">P2</span></td>
+      <td><b>Prop behaviors + camera choreography + 3D world title.</b> Port gen’s
+          behavior set (orbit/spin/bob/pulse) to reverie props; section-aware Drift-camera
+          moves; the recipe’s <code>world_name</code> as horizon text in the intro.</td>
+      <td><span class="pill p2">Claude</span></td>
+      <td>Three small systems.</td>
+    </tr>
+    <tr>
+      <td class="pri"><span class="pill p3">P3</span></td>
+      <td><b>GPU instancing</b> to break the ~90-prop ceiling (measured 9 fps @ 5k
+          scene-root props) — the unlock for every “denser worlds” idea.</td>
+      <td><span class="pill p3">Claude</span></td>
+      <td>Infrastructure; biggest single item.</td>
+    </tr>
+    <tr>
+      <td class="pri"><span class="pill p3">P3</span></td>
+      <td><b>More mood packs</b> via the runtime registry (4 → 8–10 worlds) and
+          <b>ground-as-instrument</b> (bass-driven vertex displacement).</td>
+      <td><span class="pill p3">Claude</span></td>
+      <td>Content + one shader.</td>
+    </tr>
+  </table>
+
+  <h2>Backlog — LLM tier polish</h2>
   <table>
     <tr><th></th><th>Item</th><th>Who</th><th>Notes</th></tr>
     <tr>

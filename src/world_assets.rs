@@ -284,6 +284,44 @@ fn layout_position(arrangement: Arrangement, i: usize, rng: &mut u64) -> Vec3 {
 #[derive(Component)]
 pub struct WorldProp;
 
+/// A landmark's emissive beacon, carrying its full-intensity emissive so
+/// [`pulse_beacons`] can breathe it with the drums/bass without recomputing
+/// the colour.
+#[derive(Component)]
+pub struct Beacon {
+    pub base: LinearRgba,
+}
+
+/// Breathe the landmark beacons with the rhythm: the drums stem (Demucs
+/// curve) when present, else the live tap's bass envelope. Reduce-flashing
+/// holds them steady — this is the one stem layer that modulates
+/// *brightness*, so it takes the strictest gate; everything else reacts via
+/// motion.
+pub fn pulse_beacons(
+    comfort: Res<crate::Comfort>,
+    beat: Res<crate::playback::Beat>,
+    stems: Res<crate::playback::StemLevels>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut q: Query<(&Beacon, &MeshMaterial3d<StandardMaterial>)>,
+) {
+    let drums = stems.0[0].max(beat.bass);
+    let intensity = if comfort.reduce_flashing {
+        0.8
+    } else {
+        // Motion-dominant: a slow swell with a small beat tickle on top.
+        0.55 + drums * 0.45 + beat.pulse * 0.12
+    };
+    for (beacon, mat) in &mut q {
+        if let Some(mut m) = materials.get_mut(&mat.0) {
+            m.emissive = LinearRgba::rgb(
+                beacon.base.red * intensity,
+                beacon.base.green * intensity,
+                beacon.base.blue * intensity,
+            );
+        }
+    }
+}
+
 /// Materialize rise animation (spec 1g): each prop grows in from the ground,
 /// staggered so the last one settles on the incoming track's first downbeat.
 #[derive(Component)]
@@ -533,21 +571,24 @@ pub fn populate_world_props(
             e.insert(range);
         }
         if let Some(emissive) = p.beacon {
-            // A static unlit sphere — glow without a per-landmark light cost,
-            // and Comfort-safe by construction (it never pulses).
+            // An unlit sphere — glow without a per-landmark light cost. Its
+            // intensity breathes with the drums/bass in `pulse_beacons`
+            // (Comfort-gated to steady under reduce-flashing).
             let radius = (0.22 * p.scale).clamp(0.1, 0.6);
             let height = (2.6 * p.scale).clamp(2.0, 14.0);
+            let base = LinearRgba::new(
+                accent.to_linear().red * 1.4 * emissive,
+                accent.to_linear().green * 1.4 * emissive,
+                accent.to_linear().blue * 1.4 * emissive,
+                1.0,
+            );
             commands.spawn((
                 WorldProp,
+                Beacon { base },
                 Mesh3d(beacon_mesh.clone()),
                 MeshMaterial3d(materials.add(StandardMaterial {
                     base_color: accent.with_alpha(0.9),
-                    emissive: LinearRgba::new(
-                        accent.to_linear().red * 1.4 * emissive,
-                        accent.to_linear().green * 1.4 * emissive,
-                        accent.to_linear().blue * 1.4 * emissive,
-                        1.0,
-                    ),
+                    emissive: base,
                     unlit: true,
                     ..default()
                 })),

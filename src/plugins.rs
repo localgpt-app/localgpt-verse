@@ -124,6 +124,7 @@ impl Plugin for WorldPlugin {
             .init_resource::<world::PaletteWash>()
             .init_resource::<world::HeldRing>()
             .init_resource::<world::SectionFeel>()
+            .init_resource::<world::ParticleField>()
             // The agent's background override (M7) — always present because
             // the palette wash reads it in every feature config.
             .init_resource::<crate::agent_types::EnvOverride>()
@@ -163,7 +164,11 @@ impl Plugin for WorldAssetsPlugin {
             .add_systems(Startup, world_assets::load_asset_manifest)
             .add_systems(
                 Update,
-                (world_assets::populate_world_props, world_assets::rise_props)
+                (
+                    world_assets::populate_world_props,
+                    world_assets::rise_props,
+                    world_assets::pulse_beacons,
+                )
                     .run_if(in_state(AppState::InWorld)),
             );
     }
@@ -215,13 +220,16 @@ impl Plugin for PlaybackPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Playback>()
             .init_resource::<Beat>()
+            .init_resource::<playback::StemLevels>()
             // Ordered: analysis applies the grid/sections/mood on a track
-            // change, the live tap feeds energy/onsets, then advance decays the
+            // change, the stem sampler reads its curves at the playhead, the
+            // live tap feeds energy/onsets/bands, then advance decays the
             // pulse, derives phase, and (when simulated) moves the clock.
             .add_systems(
                 Update,
                 (
                     analysis::sync_analysis,
+                    analysis::update_stem_levels,
                     audio::update_beat_from_tap,
                     playback::advance_playback,
                 )

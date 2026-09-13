@@ -282,6 +282,13 @@ pub struct Beat {
     pub phase: f32,
     pub pulse: f32,
     pub energy: f32,
+    /// Live bass-band loudness 0..1 (smoothed from the audio tap). Feeds the
+    /// bass-reactive world layers (drifter sway, beacon pulse) even when the
+    /// track has no Demucs stems.
+    pub bass: f32,
+    /// Live high-band loudness 0..1 ("sparkle") from the audio tap — drives
+    /// the particle field's emissive breathing.
+    pub highs: f32,
     /// Wall-clock accumulator used to shape the simulated energy envelope.
     pub clock: f32,
     /// First-beat offset in seconds (from analysis, PLAN.md M3).
@@ -298,12 +305,22 @@ impl Default for Beat {
             phase: 0.0,
             pulse: 0.0,
             energy: 0.6,
+            bass: 0.0,
+            highs: 0.0,
             clock: 0.0,
             offset: 0.0,
             grid: false,
         }
     }
 }
+
+/// Per-stem intensity 0..1 for the current track at the playhead —
+/// `[drums, bass, vocals, other]`, sampled from the analysis sidecar's Demucs
+/// curves (`ml` feature) and one-pole smoothed. All zeros when the track has
+/// no stems; consumers take `max(stem, live band)` so the mixed/live signals
+/// degrade into the same behaviours.
+#[derive(Resource, Default)]
+pub struct StemLevels(pub [f32; 4]);
 
 /// Advance the transport and synthesise the beat/energy signals.
 ///

@@ -53,6 +53,16 @@ pub struct Particle {
 const PARTICLE_SPREAD: f32 = 30.0;
 const PARTICLE_MAX_Y: f32 = 18.0;
 
+/// The live particle field's shared material handle + tint, published by
+/// [`spawn_particles`] so [`animate_world`] can breathe the field's emissive
+/// with the live band envelopes without a per-particle cost. `None` when no
+/// field is spawned (rate 0 / no recipe).
+#[derive(Resource, Default)]
+pub struct ParticleField {
+    pub material: Option<Handle<StandardMaterial>>,
+    pub tint: Color,
+}
+
 /// Handles to the shared world materials so palette swaps are cheap.
 #[derive(Resource)]
 pub struct WorldMaterials {
@@ -429,10 +439,12 @@ pub fn palette_wash(
 /// (kind and rounded rate), so it's cheap. No recipe or rate 0 means no
 /// particles (and any existing ones are despawned). Seeded deterministically
 /// from the recipe seed.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_particles(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut field: ResMut<ParticleField>,
     active_recipe: Res<crate::recipe::ActiveRecipe>,
     theme: Res<Theme>,
     existing: Query<Entity, With<Particle>>,
@@ -448,7 +460,9 @@ pub fn spawn_particles(
     }
     *last = signature;
 
-    // Always clear first (covers rate→0 and kind swaps).
+    // Always clear first (covers rate→0 and kind swaps) — including the
+    // published material handle, so nothing animates a dead field.
+    field.material = None;
     for e in &existing {
         commands.entity(e).despawn();
     }
@@ -472,12 +486,18 @@ pub fn spawn_particles(
     };
     let mesh = meshes.add(Sphere::new(0.06).mesh().ico(2).unwrap());
     // One shared material for the whole field (cheap); per-kind tint only.
+    // The handle is published so `animate_world` can breathe its emissive
+    // with the live high band — one material write per frame, not 200.
     let material = materials.add(StandardMaterial {
         base_color: tint.with_alpha(0.7),
         emissive: scaled_linear(tint, 0.5),
         unlit: true,
         ..default()
     });
+    *field = ParticleField {
+        material: Some(material.clone()),
+        tint,
+    };
     let mut rng = recipe.seed;
     for _ in 0..count {
         let x = (crate::world_assets::splitmix(&mut rng) as f32 / u32::MAX as f32 - 0.5)
@@ -502,17 +522,26 @@ pub fn spawn_particles(
 }
 
 /// Drift the shapes; pulse their glow with the beat; obey the world clock so a
+/// Drift the shapes; pulse their glow with the beat; obey the world clock so a
 /// paused world slows to a near-freeze (time-dilation). The recipe's
 /// `motion_speed` and the current section's feel ([`SectionFeel`]) both scale
 /// the motion; the section's `energy_shift` rides on the live energy envelope.
+///
+/// Stem/band reactivity: the world listens per frequency range, not just as
+/// one loudness — bass (Demucs curve when present, else the live tap) swells
+/// the drifters' sway, the "other" stem quickens their spin, drums accent the
+/// beat glow, vocals widen the particles' wander, and the live high band
+/// breathes the particle field's emissive.
 #[allow(clippy::too_many_arguments)]
 pub fn animate_world(
     time: Res<Time>,
     clock: Res<WorldClock>,
     beat: Res<Beat>,
+    stems: Res<crate::playback::StemLevels>,
     comfort: Res<crate::Comfort>,
     feel: Res<SectionFeel>,
     active_recipe: Res<crate::recipe::ActiveRecipe>,
+    particle_field: Res<ParticleField>,
     world_mats: Option<Res<WorldMaterials>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut drifters: Query<(&Drifter, &mut Transform), Without<Particle>>,
@@ -526,20 +555,32 @@ pub fn animate_world(
     // and the current section's choreography multiplies on top (Calm/Active).
     // Absent recipe → 1.0 (today's behaviour).
     let motion = active_recipe.get().map(|r| r.motion_speed).unwrap_or(1.0) * feel.motion;
+    // Stem levels take precedence when the Demucs pass ran; the live tap's
+    // band envelopes stand in otherwise (max, so the louder truth wins).
+    let bass = stems.0[1].max(beat.bass);
+    let drums = stems.0[0];
+    let vocals = stems.0[2];
+    let other = stems.0[3];
+    // Comfort › Reduce flashing: reactivity stays, flashing doesn't — the
+    // bands scale *motion* (slow) rather than strobing brightness.
+    let react = if comfort.reduce_flashing { 0.5 } else { 1.0 };
 
     for (d, mut tf) in &mut drifters {
         let p = t * clock.speed;
+        // Bass swells the sway (±60% around the base amplitude).
+        let sway = 0.6 * (0.7 + bass * 0.6 * react);
         tf.translation.y =
-            d.base.y + (p * 0.4 * motion + d.seed * std::f32::consts::TAU).sin() * 0.6 * gentle;
+            d.base.y + (p * 0.4 * motion + d.seed * std::f32::consts::TAU).sin() * sway * gentle;
         tf.translation.x =
             d.base.x + (p * 0.23 * motion + d.seed * std::f32::consts::PI).cos() * 0.4 * gentle;
-        tf.rotate_y(dt * (0.2 + d.seed.fract() * 0.4) * gentle * motion);
+        tf.rotate_y(dt * (0.2 + d.seed.fract() * 0.4) * gentle * motion * (0.7 + other * 0.6));
     }
 
     // M7: drift the recipe's particle layer. Direction is kind-dependent
     // (embers/sparks rise, snow falls, dust/spores hover), speed scaled by the
-    // recipe's drift and the global motion multiplier. Particles recycle to the
-    // bottom (rising kinds) or top (falling) when they leave the volume.
+    // recipe's drift, the global motion multiplier, and the drums (lift) and
+    // vocals (wander) levels. Particles recycle to the bottom (rising kinds)
+    // or top (falling) when they leave the volume.
     use crate::recipe::ParticleKind;
     for (p, mut tf) in &mut particles {
         let vertical = match p.kind {
@@ -547,10 +588,11 @@ pub fn animate_world(
             ParticleKind::Snow => -0.6,                       // fall
             ParticleKind::Dust | ParticleKind::Spore => 0.15, // hover
         };
-        let speed = vertical * p.drift * motion * gentle * 1.5;
+        let speed = vertical * p.drift * motion * gentle * 1.5 * (0.8 + drums * 0.4 * react);
         tf.translation.y += dt * speed;
-        // Lateral wander for life.
-        tf.translation.x += (t * 0.5 + p.seed * std::f32::consts::TAU).sin() * dt * 0.3 * gentle;
+        // Lateral wander for life — widened by the vocal level.
+        let wander = 0.3 + vocals * 0.5 * react;
+        tf.translation.x += (t * 0.5 + p.seed * std::f32::consts::TAU).sin() * dt * wander * gentle;
         // Recycle when out of bounds.
         if tf.translation.y > PARTICLE_MAX_Y {
             tf.translation.y = 0.0;
@@ -559,16 +601,33 @@ pub fn animate_world(
         }
     }
 
+    // The particle field's emissive breathes with the live high band
+    // ("sparkle") — one shared-material write, no per-particle cost.
+    if let Some(handle) = &particle_field.material
+        && let Some(mut material) = materials.get_mut(handle)
+    {
+        let sparkle = if comfort.reduce_flashing {
+            0.45
+        } else {
+            (0.35 + beat.highs * 0.8 + beat.energy * 0.2).min(1.2)
+        };
+        material.emissive = scaled_linear(particle_field.tint, sparkle);
+    }
+
     // Beat-reactive emissive on the shared drifter material. (Split out of a
     // let-chain: chained `let` bindings are read-only in Rust 2024.)
     let Some(world_mats) = world_mats else { return };
     if let Some(mut material) = materials.get_mut(&world_mats.drifter) {
         // Comfort › Reduce flashing holds the glow steady (no beat pulse). The
-        // section's energy shift rides on the live envelope (clamped ≥0).
+        // section's energy shift rides on the live envelope (clamped ≥0), and
+        // the drums stem accents the pulse.
         let glow = if comfort.reduce_flashing {
             0.7
         } else {
-            0.55 + beat.pulse * 0.9 * (beat.energy + feel.energy_shift).max(0.0)
+            0.55 + beat.pulse
+                * 0.9
+                * (beat.energy + feel.energy_shift).max(0.0)
+                * (1.0 + drums * 0.35)
         };
         // M7: scale the glow by the recipe's bloom ceiling (1.0 = today).
         let glow = glow
