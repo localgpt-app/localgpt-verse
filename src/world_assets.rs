@@ -540,11 +540,22 @@ pub fn populate_world_props(
     let mut plan: Vec<PlannedProp> = Vec::new();
 
     // Primary mood props, three tiers, each assigned the section it rises in.
-    let entries: Vec<_> = manifest
+    // The extended moods (Cinder Reach, Mirage Circuit, …) borrow their base
+    // quadrant's asset set — same neighbourhood, different hour — until the
+    // pack carries entries of their own.
+    let mut entries: Vec<_> = manifest
         .assets
         .iter()
         .filter(|a| a.mood_index() == mood)
         .collect();
+    if entries.is_empty() && mood >= crate::theme::ASSET_BASE_MOODS {
+        let base = mood % crate::theme::ASSET_BASE_MOODS;
+        entries = manifest
+            .assets
+            .iter()
+            .filter(|a| a.mood_index() == base)
+            .collect();
+    }
     for entry in &entries {
         let count = (entry.tier.count() as f32 * density).round().max(1.0) as usize;
         for _ in 0..count {
@@ -1081,20 +1092,30 @@ mod tests {
     }
 
     #[test]
-    fn every_built_in_mood_has_its_own_arrangement() {
-        let used: Vec<Arrangement> = crate::theme::moods()
-            .iter()
-            .map(|m| m.arrangement)
-            .collect();
-        for (i, a) in used.iter().enumerate() {
-            for (j, b) in used.iter().enumerate() {
+    fn the_base_moods_have_distinct_arrangements_and_variants_match_their_base() {
+        let moods = crate::theme::moods();
+        let base = &moods[..crate::theme::ASSET_BASE_MOODS.min(moods.len())];
+        // The base four each own a distinct arrangement (world identity).
+        for (i, a) in base.iter().map(|m| m.arrangement).enumerate() {
+            for (j, b) in base.iter().map(|m| m.arrangement).enumerate() {
                 assert!(
                     i == j || a != b,
                     "`{}` and `{}` share the {a:?} arrangement",
-                    crate::theme::moods()[i].id,
-                    crate::theme::moods()[j].id
+                    base[i].id,
+                    base[j].id
                 );
             }
+        }
+        // The extended variants borrow their base quadrant's asset set — and
+        // must lay it out the same way, or the "same neighbourhood, different
+        // hour" promise breaks.
+        for (i, m) in moods.iter().enumerate().skip(base.len()) {
+            let b = &base[i % base.len()];
+            assert_eq!(
+                m.arrangement, b.arrangement,
+                "`{}` must arrange like its base `{}`",
+                m.id, b.id
+            );
         }
     }
 

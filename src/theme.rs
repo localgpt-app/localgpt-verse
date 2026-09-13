@@ -220,7 +220,66 @@ pub const BUILTIN_MOODS: &[WorldMood] = &[
         ambient: Color::srgb(0.62, 0.78, 0.92),
         arrangement: Arrangement::Rings,
     },
+    // The extended quadrants — each a *variant* of the base world whose asset
+    // set it borrows (see `ASSET_BASE_MOODS`): same neighbourhood, different
+    // hour. They split the four quadrants by mean energy, so the rule mapper
+    // has eight worlds to land in instead of four.
+    // Ember Flats, smoldering — driving, dark, *restrained*. Accent #E86A4A.
+    WorldMood {
+        id: "cinder-reach",
+        world_name: "CINDER REACH",
+        accent: Color::srgb(0.910, 0.416, 0.290),
+        sky_top: Color::srgb(0.545, 0.251, 0.176),
+        sky_bottom: Color::srgb(0.302, 0.145, 0.125),
+        fog: Color::srgb(0.36, 0.22, 0.20),
+        ground: Color::srgb(0.220, 0.125, 0.110),
+        ambient: Color::srgb(0.90, 0.62, 0.50),
+        arrangement: Arrangement::Clusters,
+    },
+    // Velvet Circuit, bleached by daylight haze — driving, bright, restrained.
+    // Accent #B7F5FF.
+    WorldMood {
+        id: "mirage-circuit",
+        world_name: "MIRAGE CIRCUIT",
+        accent: Color::srgb(0.718, 0.961, 1.0),
+        sky_top: Color::srgb(0.529, 0.667, 0.788),
+        sky_bottom: Color::srgb(0.302, 0.365, 0.451),
+        fog: Color::srgb(0.55, 0.62, 0.70),
+        ground: Color::srgb(0.290, 0.325, 0.380),
+        ambient: Color::srgb(0.72, 0.84, 0.95),
+        arrangement: Arrangement::Grid,
+    },
+    // Tide Gardens at their stillest — calm, dark, quiet. Accent #6FA8B8.
+    WorldMood {
+        id: "abyss-terraces",
+        world_name: "ABYSS TERRACES",
+        accent: Color::srgb(0.435, 0.659, 0.722),
+        sky_top: Color::srgb(0.024, 0.078, 0.106),
+        sky_bottom: Color::srgb(0.012, 0.024, 0.039),
+        fog: Color::srgb(0.06, 0.16, 0.19),
+        ground: Color::srgb(0.024, 0.075, 0.090),
+        ambient: Color::srgb(0.35, 0.55, 0.60),
+        arrangement: Arrangement::Terraces,
+    },
+    // Glass Expanse at first light — calm, bright, hushed. Accent #FFD9B8.
+    WorldMood {
+        id: "dawn-expanse",
+        world_name: "DAWN EXPANSE",
+        accent: Color::srgb(1.0, 0.851, 0.722),
+        sky_top: Color::srgb(0.839, 0.729, 0.690),
+        sky_bottom: Color::srgb(0.573, 0.478, 0.451),
+        fog: Color::srgb(0.72, 0.63, 0.60),
+        ground: Color::srgb(0.380, 0.322, 0.310),
+        ambient: Color::srgb(0.95, 0.85, 0.78),
+        arrangement: Arrangement::Rings,
+    },
 ];
+
+/// How many of the built-in moods the asset pack is tagged for. The extended
+/// quadrants (Cinder Reach, Mirage Circuit, Abyss Terraces, Dawn Expanse)
+/// borrow the base quadrant's models — `mood % ASSET_BASE_MOODS` — until the
+/// pack grows entries of their own.
+pub const ASSET_BASE_MOODS: usize = 4;
 
 // ---------------------------------------------------------------------------
 // The mood registry — which worlds are mounted right now

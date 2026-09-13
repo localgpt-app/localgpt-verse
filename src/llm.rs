@@ -444,6 +444,7 @@ mod tests {
             beat_offset: 0.4,
             sections: vec![0.0, 0.22, 0.51, 0.78],
             energy: vec![0.2; 214],
+            centroid_hz: Some(1800.0),
             mood: 1,
             mood_id: None,
             loudness_lufs: Some(-14.0),

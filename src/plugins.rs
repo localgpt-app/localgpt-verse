@@ -125,6 +125,9 @@ impl Plugin for WorldPlugin {
             .init_resource::<world::HeldRing>()
             .init_resource::<world::SectionFeel>()
             .init_resource::<world::ParticleField>()
+            // Continuous timbre + mood blend — read by the palette wash.
+            .init_resource::<analysis::Timbre>()
+            .init_resource::<analysis::MoodBlend>()
             // The agent's background override (M7) — always present because
             // the palette wash reads it in every feature config.
             .init_resource::<crate::agent_types::EnvOverride>()

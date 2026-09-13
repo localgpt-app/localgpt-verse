@@ -450,6 +450,8 @@ pub fn palette_wash(
     time: Res<Time>,
     theme: Res<Theme>,
     active_recipe: Res<crate::recipe::ActiveRecipe>,
+    timbre: Res<crate::analysis::Timbre>,
+    blend: Res<crate::analysis::MoodBlend>,
     env_override: Res<crate::agent_types::EnvOverride>,
     mut wash: ResMut<PaletteWash>,
     world_mats: Option<Res<WorldMaterials>>,
@@ -500,6 +502,29 @@ pub fn palette_wash(
         }
         if let Some(t) = ambient_tint {
             p.ambient = tint(p.ambient, t, 1.0);
+        }
+        // Continuous timbre: bright tracks lift fog/ground toward the sky,
+        // dark timbres deepen them toward the ground — same mood, different
+        // grain. Subtle by construction (≤30% at the extremes).
+        let b = timbre.0;
+        if b >= 0.5 {
+            let f = (b - 0.5) * 0.6;
+            p.fog = p.fog.mix(&p.sky_top, f * 0.5);
+            p.ground = p.ground.mix(&p.drift_base, f * 0.35);
+        } else {
+            let f = (0.5 - b) * 0.6;
+            p.fog = p.fog.mix(&p.ground, f * 0.5);
+            p.drift_base = p.drift_base.mix(&p.fog, f * 0.35);
+        }
+        // Continuous mood: blend toward the neighbour the mapper almost
+        // chose, by how close the call was.
+        if blend.amount > 0.001 {
+            let moods = crate::theme::moods();
+            let toward = moods
+                .get(blend.toward.min(moods.len().saturating_sub(1)))
+                .copied()
+                .unwrap_or(moods[0]);
+            p = p.mix(&Palette::of(&toward), blend.amount);
         }
     }
 

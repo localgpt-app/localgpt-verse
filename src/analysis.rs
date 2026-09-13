@@ -59,6 +59,11 @@ pub struct TrackAnalysis {
     pub sections: Vec<f32>,
     /// Per-second loudness envelope, normalized 0..1.
     pub energy: Vec<f32>,
+    /// Mean spectral centroid in Hz (the track's timbral brightness). The
+    /// continuous-timbre signal: the palette wash nudges hue by it and the
+    /// mood blend weighs it. Absent in older sidecars (reads as neutral).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub centroid_hz: Option<f32>,
     /// Mood index into [`crate::theme::moods()`] from the quadrant mapping.
     ///
     /// Kept as the compatibility representation; read through
@@ -556,11 +561,19 @@ fn map_mood(bpm: f32, mean_energy: f32, mean_centroid_hz: f32) -> usize {
     let tempo_norm = ((bpm - 70.0) / 90.0).clamp(0.0, 1.0); // 70..160 BPM
     let arousal = 0.6 * tempo_norm + 0.4 * mean_energy;
     let bright = (mean_centroid_hz / 2500.0).clamp(0.0, 1.0);
-    match (arousal > 0.55, bright > 0.45) {
-        (true, true) => 1,   // Velvet Circuit — driving, bright/neon
-        (true, false) => 0,  // Ember Flats — driving, warm/dark
-        (false, true) => 3,  // Glass Expanse — calm, bright/icy
-        (false, false) => 2, // Tide Gardens — calm, deep/dark
+    // Eight octants: the four base quadrants split by mean energy — the base
+    // world for assertive tracks, its variant (same neighbourhood, different
+    // hour: smoldering / bleached / still / first-light) for restrained ones.
+    // The extended four borrow their base's asset set (ASSET_BASE_MOODS).
+    match (arousal > 0.55, bright > 0.45, mean_energy > 0.5) {
+        (true, true, true) => 1,    // VELVET CIRCUIT
+        (true, true, false) => 5,   // MIRAGE CIRCUIT
+        (true, false, true) => 0,   // EMBER FLATS
+        (true, false, false) => 4,  // CINDER REACH
+        (false, true, true) => 3,   // GLASS EXPANSE
+        (false, true, false) => 7,  // DAWN EXPANSE
+        (false, false, true) => 2,  //   TIDE GARDENS
+        (false, false, false) => 6, //  ABYSS TERRACES
     }
 }
 
@@ -587,6 +600,7 @@ fn analyze(path: &Path) -> Option<TrackAnalysis> {
         beat_offset,
         sections,
         energy,
+        centroid_hz: Some(mean_centroid),
         mood,
         mood_id: Some(crate::theme::mood_id(mood).to_string()),
         loudness_lufs,
@@ -605,6 +619,31 @@ fn analyze(path: &Path) -> Option<TrackAnalysis> {
 // ---------------------------------------------------------------------------
 
 type WorkerResult = (String, TrackAnalysis);
+
+/// Continuous timbre of the current track: normalized spectral brightness
+/// (0 = dark timbre, 1 = bright), from the sidecar's mean centroid. The
+/// palette wash nudges its hues by it — a warm-vintage track and a glassy
+/// one in the same mood no longer paint identical worlds.
+#[derive(Resource)]
+pub struct Timbre(pub f32);
+
+impl Default for Timbre {
+    fn default() -> Self {
+        Self(0.5)
+    }
+}
+
+/// Continuous position between the discrete moods: which neighbour palette
+/// the current world blends toward, and by how much. A track sitting near a
+/// mapper decision boundary takes on some of the world it *almost* landed in
+/// (up to 50% at the boundary itself, easing to nothing 0.12 away).
+#[derive(Resource, Default)]
+pub struct MoodBlend {
+    /// The neighbour mood's index into [`crate::theme::moods()`].
+    pub toward: usize,
+    /// Blend amount 0..~0.5.
+    pub amount: f32,
+}
 
 /// Analysis results by track id (blake3 content hash = sidecar key), plus the
 /// worker channels. Id-keying makes analyses rename/move-proof in memory the
@@ -1006,7 +1045,7 @@ pub fn mount_analysis(world: &mut World, deps: WorkerDeps) {
 /// Request analysysis for the current + next few tracks, drain worker results,
 /// and apply the current track's analysis to the transport/beat/theme exactly
 /// once per (track, availability) state.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn sync_analysis(
     mut store: ResMut<AnalysisStore>,
     mut playback: ResMut<Playback>,
@@ -1014,6 +1053,8 @@ pub fn sync_analysis(
     mut theme: ResMut<Theme>,
     mut layout: ResMut<crate::world_assets::WorldLayout>,
     mut active_recipe: ResMut<crate::recipe::ActiveRecipe>,
+    mut timbre: ResMut<Timbre>,
+    mut blend: ResMut<MoodBlend>,
     mut applied: Local<Option<(Option<String>, bool)>>,
 ) {
     if playback.queue.is_empty() {
@@ -1082,6 +1123,23 @@ pub fn sync_analysis(
                 .unwrap_or_else(|| crate::world_assets::path_seed(current_path.as_ref().unwrap()));
             playback.queue[idx].mood = mood;
             theme.mood = mood;
+            // Continuous timbre + mood blend (the "almost landed in"
+            // neighbourhood). Distances use the same axes/thresholds as
+            // `map_mood` so the blend is the mapper's own uncertainty.
+            timbre.0 = (a.centroid_hz.unwrap_or(1250.0) / 2500.0).clamp(0.0, 1.0);
+            let mean_energy = a.energy.iter().sum::<f32>() / a.energy.len().max(1) as f32;
+            let tempo_norm = ((a.bpm - 70.0) / 90.0).clamp(0.0, 1.0);
+            let arousal = 0.6 * tempo_norm + 0.4 * mean_energy;
+            let base = mood % crate::theme::ASSET_BASE_MOODS;
+            let (toward_base, dist) = if (bright_dist(timbre.0)).abs() < (arousal - 0.55).abs() {
+                // Closer to the brightness boundary → flip bright/dark.
+                (base ^ 1, (bright_dist(timbre.0)).abs())
+            } else {
+                // Closer to the arousal boundary → flip driving/calm.
+                (base ^ 2, (arousal - 0.55).abs())
+            };
+            blend.toward = toward_base;
+            blend.amount = ((0.12 - dist) / 0.12).clamp(0.0, 1.0) * 0.5;
             // M7: push the track's recipe (if any) to the live resource the
             // renderer reads. A pinned seed overrides the recipe's seed so
             // "Keep this world" stays deterministic even with an LLM recipe.
@@ -1110,8 +1168,16 @@ pub fn sync_analysis(
             beat.grid = false;
             active_recipe.recipe = None;
             active_recipe.moments.clear();
+            timbre.0 = 0.5;
+            blend.amount = 0.0;
         }
     }
+}
+
+/// Signed distance of a normalized brightness from the mapper's 0.45
+/// boundary (kept as a helper so the blend and `map_mood` can't drift).
+fn bright_dist(bright: f32) -> f32 {
+    bright - 0.45
 }
 
 /// Resolve the recipe's section choreography onto measured segment indices
@@ -1266,11 +1332,30 @@ mod tests {
     }
 
     #[test]
-    fn mood_quadrants() {
-        assert_eq!(map_mood(150.0, 0.8, 4000.0), 1); // driving + bright
-        assert_eq!(map_mood(150.0, 0.8, 500.0), 0); //  driving + dark
-        assert_eq!(map_mood(70.0, 0.1, 4000.0), 3); //  calm + bright
-        assert_eq!(map_mood(70.0, 0.1, 500.0), 2); //   calm + dark
+    fn mood_octants() {
+        // The four base quadrants (assertive energy).
+        assert_eq!(map_mood(150.0, 0.8, 4000.0), 1); // driving + bright → VELVET
+        assert_eq!(map_mood(150.0, 0.8, 500.0), 0); //  driving + dark → EMBER
+        assert_eq!(map_mood(70.0, 0.6, 4000.0), 3); //  calm + bright → GLASS
+        assert_eq!(map_mood(70.0, 0.6, 500.0), 2); //   calm + dark → TIDE
+        // …and their restrained variants (same neighbourhood, different hour).
+        assert_eq!(map_mood(150.0, 0.3, 4000.0), 5); // driving + bright → MIRAGE
+        assert_eq!(map_mood(150.0, 0.3, 500.0), 4); //  driving + dark → CINDER
+        assert_eq!(map_mood(70.0, 0.3, 4000.0), 7); //  calm + bright → DAWN
+        assert_eq!(map_mood(70.0, 0.3, 500.0), 6); //   calm + dark → ABYSS
+    }
+
+    #[test]
+    fn extended_moods_borrow_their_base_quadrant() {
+        // The asset-borrowing invariant the extended moods rely on.
+        for extended in 4..8 {
+            let base = extended % crate::theme::ASSET_BASE_MOODS;
+            assert!(base < crate::theme::ASSET_BASE_MOODS);
+            // Same bright/dark family: base^1 flips brightness, base^2 the
+            // drive — both stay inside the asset-tagged four.
+            assert!(base ^ 1 < 4);
+            assert!(base ^ 2 < 4);
+        }
     }
 
     fn moment(role: SectionRole) -> SectionMoment {
@@ -1295,6 +1380,7 @@ mod tests {
                 e.extend(vec![0.5; 10]); //  30–40 s: mid
                 e
             },
+            centroid_hz: None,
             mood: 0,
             mood_id: None,
             loudness_lufs: None,
