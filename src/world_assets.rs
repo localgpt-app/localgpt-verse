@@ -284,6 +284,12 @@ fn layout_position(arrangement: Arrangement, i: usize, rng: &mut u64) -> Vec3 {
 #[derive(Component)]
 pub struct WorldProp;
 
+/// Marker for scatter-tier props: the only tier that follows the section
+/// verbs' `scatter` multiplier after settling (the outro sinks the ground
+/// cover back into the ground it rose from).
+#[derive(Component)]
+pub struct ScatterProp;
+
 /// A landmark's emissive beacon, carrying its full-intensity emissive so
 /// [`pulse_beacons`] can breathe it with the drums/bass without recomputing
 /// the colour.
@@ -301,15 +307,17 @@ pub fn pulse_beacons(
     comfort: Res<crate::Comfort>,
     beat: Res<crate::playback::Beat>,
     stems: Res<crate::playback::StemLevels>,
+    feel: Res<crate::world::SectionFeel>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut q: Query<(&Beacon, &MeshMaterial3d<StandardMaterial>)>,
 ) {
     let drums = stems.0[0].max(beat.bass);
     let intensity = if comfort.reduce_flashing {
-        0.8
+        0.8 * feel.beacons.clamp(0.0, 1.5)
     } else {
-        // Motion-dominant: a slow swell with a small beat tickle on top.
-        0.55 + drums * 0.45 + beat.pulse * 0.12
+        // Motion-dominant: a slow swell with a small beat tickle on top. The
+        // section's verb lights the chorus up and dims the bridge.
+        (0.55 + drums * 0.45 + beat.pulse * 0.12) * feel.beacons.clamp(0.0, 1.5)
     };
     for (beacon, mat) in &mut q {
         if let Some(mut m) = materials.get_mut(&mat.0) {
@@ -328,7 +336,9 @@ pub fn pulse_beacons(
 pub struct PropRise {
     delay: f32,
     dur: f32,
-    target: f32,
+    /// Target scale, per-axis (non-uniform for the skyline stelae, which grow
+    /// upward only).
+    target: Vec3,
     t: f32,
 }
 
@@ -348,21 +358,26 @@ pub(crate) fn stagger_delay(i: usize, n: usize, settle: f32) -> f32 {
 }
 
 /// Grow rising props in with an ease-out; obeys the world clock so a paused
-/// world holds its breath mid-materialize.
+/// world holds its breath mid-materialize. After settling, scatter props keep
+/// following their section verb's scale (the outro sinks them).
 pub fn rise_props(
     time: Res<Time>,
     clock: Res<crate::WorldClock>,
-    mut props: Query<(&mut PropRise, &mut Transform)>,
+    feel: Res<crate::world::SectionFeel>,
+    mut props: Query<(&mut PropRise, &mut Transform, Option<&ScatterProp>)>,
 ) {
     let dt = time.delta_secs() * clock.speed;
-    for (mut rise, mut tf) in &mut props {
+    for (mut rise, mut tf, scatter) in &mut props {
         if rise.t >= rise.delay + rise.dur {
+            if scatter.is_some() {
+                tf.scale = rise.target * feel.scatter.max(0.0);
+            }
             continue;
         }
         rise.t += dt;
         let f = ((rise.t - rise.delay) / rise.dur).clamp(0.0, 1.0);
         let eased = 1.0 - (1.0 - f).powi(3); // out-cubic, no overshoot
-        tf.scale = Vec3::splat((rise.target * eased).max(rise.target * 0.01));
+        tf.scale = rise.target * eased.max(0.01);
     }
 }
 
@@ -448,13 +463,30 @@ pub fn populate_world_props(
 
     // "Geometry settles on the first downbeat" (spec 1g): the stagger window
     // ends at the incoming track's beat offset when known, else mid-window.
-    let settle = playback
+    let current_id = playback
         .queue
         .get(playback.current % playback.queue.len().max(1))
-        .and_then(|t| t.id.as_deref())
+        .and_then(|t| t.id.clone());
+    let settle = current_id
+        .as_deref()
         .and_then(|id| analysis.beat_offset_for(id))
         .map(|offset| offset.clamp(1.3, 3.5))
         .unwrap_or(2.4);
+
+    // Whole-song materialize: with measured sections, props rise *across the
+    // track* — scatter in the intro, mediums through the verses, heroes
+    // landing exactly on the chorus — instead of everything in the first
+    // 2.4 s. The first section still settles on the downbeat (spec 1g).
+    let track_duration = playback
+        .queue
+        .get(playback.current % playback.queue.len().max(1))
+        .map(|t| t.duration)
+        .unwrap_or(0.0);
+    let sections = &playback.sections;
+    let sectioned = sections.len() >= 3 && track_duration > 0.0;
+    let chorus_seg = sections.len() / 2;
+    let section_start =
+        |seg: usize| -> f32 { sections.get(seg).copied().unwrap_or(0.0) * track_duration };
 
     // M7: a recipe may scale prop density within [0.3, 2.0] (already clamped).
     // Absent recipe → 1.0 (today's per-tier counts).
@@ -464,7 +496,7 @@ pub fn populate_world_props(
     let mut rng = layout.seed ^ (mood as u64).wrapping_mul(0x9E37_79B9);
     let mut plan: Vec<PlannedProp> = Vec::new();
 
-    // Primary mood props, three tiers.
+    // Primary mood props, three tiers, each assigned the section it rises in.
     let entries: Vec<_> = manifest
         .assets
         .iter()
@@ -481,6 +513,14 @@ pub fn populate_world_props(
                 scale: entry.placement_scale() * (0.85 + rand01(&mut rng) * 0.3),
                 range: entry.tier.visibility_range(),
                 beacon: None,
+                tier: entry.tier,
+                seg: match entry.tier {
+                    // Scatter carpet: the intro. Mediums: spread over the
+                    // verses. Heroes: land on the chorus.
+                    Tier::Scatter => 0,
+                    Tier::Medium => 1 + (i % chorus_seg.max(1)),
+                    Tier::Hero => chorus_seg,
+                },
             });
         }
     }
@@ -488,7 +528,7 @@ pub fn populate_world_props(
     // M7 secondary biomes: contrasting accents from each secondary mood's own
     // set (non-hero tiers), claiming a share of the primary budget scaled by
     // that biome's density. At most two secondaries, so accents accent rather
-    // than take over.
+    // than take over. Accents arrive *with* the chorus.
     if let Some(recipe) = recipe {
         let primary = plan.len().max(1);
         for biome in recipe.biomes.iter().skip(1).take(2) {
@@ -514,6 +554,8 @@ pub fn populate_world_props(
                     scale: entry.placement_scale() * (0.8 + rand01(&mut rng) * 0.3),
                     range: entry.tier.visibility_range(),
                     beacon: None,
+                    tier: entry.tier,
+                    seg: chorus_seg,
                 });
             }
         }
@@ -523,7 +565,7 @@ pub fn populate_world_props(
     // keywords (see `pick_hero_for_kind`), placed at their anchors. Heroes
     // stay visible through the fog — they define the skyline — and
     // `emissive > 0.1` raises a beacon above them (baked glTF materials can't
-    // take a runtime emissive).
+    // take a runtime emissive). They rise on the chorus.
     if let Some(recipe) = recipe {
         let heroes: Vec<_> = manifest
             .assets
@@ -542,18 +584,27 @@ pub fn populate_world_props(
                 scale: landmark.scale * entry.placement_scale(),
                 range: None,
                 beacon: (landmark.emissive > 0.1).then_some(landmark.emissive),
+                tier: Tier::Hero,
+                seg: chorus_seg,
             });
         }
     }
 
-    // One staggered materialize over the whole plan, so every class of
-    // placement shares the same "settle on the downbeat" window.
+    // One materialize over the whole plan: seg-0 props keep the
+    // settle-on-the-downbeat stagger; later sections rise as they arrive.
     let total = plan.len();
     let beacon_mesh = meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap());
     let accent = theme.current().accent;
     for (i, p) in plan.into_iter().enumerate() {
         let handle: Handle<_> =
             asset_server.load(GltfAssetLabel::Scene(0).from_asset(format!("models/{}", p.file)));
+        let delay = if !sectioned || p.seg == 0 {
+            stagger_delay(i, total, settle)
+        } else {
+            // Rise a moment into the section (deterministic jitter from the
+            // plan index), never before the intro has settled.
+            (section_start(p.seg) + (i as f32 * 0.37).fract() * 0.7).max(settle + 0.2)
+        };
         let mut e = commands.spawn((
             WorldProp,
             WorldAssetRoot(handle),
@@ -561,14 +612,17 @@ pub fn populate_world_props(
                 .with_scale(Vec3::splat(p.scale * 0.01))
                 .with_rotation(Quat::from_rotation_y(p.rot_y)),
             PropRise {
-                delay: stagger_delay(i, total, settle),
+                delay,
                 dur: RISE_SECS,
-                target: p.scale,
+                target: Vec3::splat(p.scale),
                 t: 0.0,
             },
         ));
         if let Some(range) = p.range {
             e.insert(range);
+        }
+        if p.tier == Tier::Scatter {
+            e.insert(ScatterProp);
         }
         if let Some(emissive) = p.beacon {
             // An unlit sphere — glow without a per-landmark light cost. Its
@@ -598,6 +652,64 @@ pub fn populate_world_props(
         }
     }
 
+    // The skyline is the waveform: thin stelae around the rim whose heights
+    // sample the track's energy curve, each rising as its section arrives —
+    // walk the rim and you read the song's shape (drops are literal peaks).
+    // Same song → same skyline; analysis pending → no skyline this pass, and
+    // the (mood, seed) re-populate when it lands draws it.
+    if let Some(curve) = current_id
+        .as_deref()
+        .and_then(|id| analysis.get(id))
+        .map(|a| &a.energy)
+        && !curve.is_empty()
+    {
+        const STELAE: usize = 28;
+        let stela_mesh = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
+        let stela_mat = materials.add(StandardMaterial {
+            base_color: theme.current().ground,
+            emissive: LinearRgba::new(
+                accent.to_linear().red * 0.22,
+                accent.to_linear().green * 0.22,
+                accent.to_linear().blue * 0.22,
+                1.0,
+            ),
+            unlit: true,
+            ..default()
+        });
+        for k in 0..STELAE {
+            let f = k as f32 / (STELAE - 1) as f32;
+            let idx = (f * (curve.len() - 1) as f32).round() as usize;
+            let h = 1.5 + curve[idx].clamp(0.0, 1.0) * 10.0;
+            let ang = f * std::f32::consts::TAU;
+            let pos = Vec3::new(ang.cos() * 46.0, -0.5, ang.sin() * 46.0);
+            // Which section does stela k live in? It rises with it.
+            let seg = sections
+                .iter()
+                .filter(|&&s| s <= f)
+                .count()
+                .saturating_sub(1);
+            let delay = if sectioned {
+                section_start(seg).max(1.3)
+            } else {
+                stagger_delay(k, STELAE, settle)
+            };
+            commands.spawn((
+                WorldProp,
+                Mesh3d(stela_mesh.clone()),
+                MeshMaterial3d(stela_mat.clone()),
+                Transform::from_translation(pos)
+                    .looking_at(Vec3::new(0.0, pos.y, 0.0), Vec3::Y)
+                    .with_scale(Vec3::new(0.8, h, 1.4)),
+                PropRise {
+                    delay,
+                    dur: RISE_SECS,
+                    target: Vec3::new(0.8, h, 1.4),
+                    t: 0.0,
+                },
+            ));
+        }
+    }
+
     if total > 0 {
         info!(
             "Placed {total} props for {} (settle {settle:.2}s, density {density:.2})",
@@ -620,6 +732,12 @@ struct PlannedProp {
     /// M7 landmark emissive (0..1): beacon strength floated above the prop.
     /// `None` = no beacon.
     beacon: Option<f32>,
+    /// Placement tier — drives the section-verb markers (`ScatterProp`) and
+    /// the section the prop rises in.
+    tier: Tier,
+    /// The section (segment index) this prop rises in — the whole-song
+    /// materialize. 0 keeps the settle-on-the-downbeat stagger.
+    seg: usize,
 }
 
 /// Keyword vocabulary mapping a recipe [`crate::recipe::LandmarkKind`] onto

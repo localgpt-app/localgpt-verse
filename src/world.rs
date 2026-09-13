@@ -234,9 +234,10 @@ impl Palette {
     }
 }
 
-/// The current section's feel, as authored by the recipe's choreography (or
-/// neutral when the recipe has none / is absent). Written by
-/// [`sync_section_moment`], read by [`animate_world`].
+/// The current section's feel, as authored by the recipe's choreography or
+/// (without one) by the section's position. [`sync_section_moment`] writes
+/// these as *targets* and eases toward them every frame, so structural verbs
+/// land as movements rather than snaps.
 #[derive(Resource)]
 pub struct SectionFeel {
     /// Additive energy shift (-1..1) for the current section: negative calms
@@ -245,6 +246,15 @@ pub struct SectionFeel {
     /// Motion multiplier for the current section (Calm 0.5 / Drift 1.0 /
     /// Active 1.6), applied on top of the recipe's `motion_speed`.
     pub motion: f32,
+    /// Structural verb — beacon brightness multiplier: the chorus lights the
+    /// landmarks up, the bridge dims them.
+    pub beacons: f32,
+    /// Structural verb — particle-field presence multiplier: the chorus
+    /// swells the field, the bridge strips it to near-nothing.
+    pub particles: f32,
+    /// Structural verb — scatter-prop scale multiplier: the outro sinks the
+    /// ground cover back into the ground it rose from.
+    pub scatter: f32,
 }
 
 impl Default for SectionFeel {
@@ -252,18 +262,83 @@ impl Default for SectionFeel {
         Self {
             energy_shift: 0.0,
             motion: 1.0,
+            beacons: 1.0,
+            particles: 1.0,
+            scatter: 1.0,
         }
     }
 }
 
-/// Apply the recipe's section choreography (M7): when the transport crosses
-/// into a new measured section, adopt its [`crate::recipe::SectionMoment`]
-/// (energy shift, motion) and optionally re-run the palette wash — the 0.8s
-/// colour breathe the crossfade already uses. Sections are fractions of the
-/// track ([`Playback::sections`]); the moment→section mapping was resolved
-/// against the full analysis by `sync_analysis`
+impl SectionFeel {
+    /// The role's structural verbs — what the world *does* in a section, over
+    /// and above the recipe's numeric modulation. Without the `llm` tier
+    /// these still fire, from the section's position in the song.
+    fn verbs(role: Option<crate::recipe::SectionRole>) -> Self {
+        use crate::recipe::SectionRole as R;
+        let mut f = Self::default();
+        match role {
+            Some(R::Intro) => {
+                f.particles = 0.6;
+                f.beacons = 0.7;
+            }
+            Some(R::Chorus) | Some(R::Drop) => {
+                f.particles = 1.35;
+                f.beacons = 1.4;
+                f.scatter = 1.15;
+            }
+            Some(R::Bridge) => {
+                f.particles = 0.15;
+                f.beacons = 0.4;
+            }
+            Some(R::Outro) => {
+                f.particles = 0.3;
+                f.beacons = 0.6;
+                f.scatter = 0.0;
+            }
+            _ => {}
+        }
+        f
+    }
+
+    fn ease_toward(&mut self, target: &Self, k: f32) {
+        self.energy_shift += (target.energy_shift - self.energy_shift) * k;
+        self.motion += (target.motion - self.motion) * k;
+        self.beacons += (target.beacons - self.beacons) * k;
+        self.particles += (target.particles - self.particles) * k;
+        self.scatter += (target.scatter - self.scatter) * k;
+    }
+}
+
+/// Positional role for a segment when no choreography moment targets it —
+/// the shape of most songs, so the rule path gets verbs too.
+fn positional_role(segment: usize, segments: usize) -> Option<crate::recipe::SectionRole> {
+    use crate::recipe::SectionRole as R;
+    if segments <= 2 {
+        return (segment == 0).then_some(R::Intro);
+    }
+    if segment == 0 {
+        Some(R::Intro)
+    } else if segment == segments - 1 {
+        Some(R::Outro)
+    } else if segment == segments / 2 {
+        Some(R::Chorus)
+    } else if segment == (segments * 3) / 4 {
+        Some(R::Bridge)
+    } else {
+        Some(R::Verse)
+    }
+}
+
+/// Apply the recipe's section choreography (M7) and the structural verbs:
+/// when the transport crosses into a new measured section, compute that
+/// section's target feel — the moment's numeric modulation plus the role's
+/// verbs — and ease toward it. A moment flagged `palette_wash` re-runs the
+/// 0.8s colour breathe the crossfade already uses. Sections are fractions of
+/// the track ([`Playback::sections`]); the moment→section mapping was
+/// resolved against the full analysis by `sync_analysis`
 /// ([`crate::recipe::ActiveRecipe::moments`]).
 pub fn sync_section_moment(
+    time: Res<Time>,
     playback: Res<Playback>,
     active_recipe: Res<crate::recipe::ActiveRecipe>,
     mut feel: ResMut<SectionFeel>,
@@ -290,31 +365,44 @@ pub fn sync_section_moment(
         .filter(|&&s| s <= frac)
         .count()
         .saturating_sub(1);
-    if *last == Some(segment) {
-        return;
+    let segments = playback.sections.len();
+    let entered = *last != Some(segment);
+    if entered {
+        *last = Some(segment);
     }
-    *last = Some(segment);
 
-    // Reset to neutral, then adopt this segment's moment if one targets it.
-    *feel = SectionFeel::default();
-    if let Some((_, m)) = active_recipe
+    // The target feel: the recipe's moment if one targets this segment,
+    // else positional verbs so sections still *do* something without the
+    // LLM tier.
+    let mut target = match active_recipe
         .moments
         .iter()
         .find(|(idx, _)| *idx == segment)
     {
-        feel.energy_shift = m.energy_shift;
-        feel.motion = match m.motion {
-            crate::recipe::Motion::Calm => 0.5,
-            crate::recipe::Motion::Drift => 1.0,
-            crate::recipe::Motion::Active => 1.6,
-        };
-        if m.palette_wash {
-            // Re-run the wash to the current palette — a 0.8s colour breathe.
-            wash.from = wash.current;
-            wash.t = 0.0;
-            wash.active = true;
+        Some((_, m)) => {
+            if entered && m.palette_wash {
+                // Re-run the wash to the current palette — a colour breathe.
+                wash.from = wash.current;
+                wash.t = 0.0;
+                wash.active = true;
+            }
+            let mut f = SectionFeel::verbs(Some(m.at_role));
+            f.energy_shift = m.energy_shift;
+            f.motion = match m.motion {
+                crate::recipe::Motion::Calm => 0.5,
+                crate::recipe::Motion::Drift => 1.0,
+                crate::recipe::Motion::Active => 1.6,
+            };
+            f
         }
+        None => SectionFeel::verbs(positional_role(segment, segments)),
+    };
+    // The outro sinks scatter regardless of who authored the feel — the
+    // world should always let go at the end.
+    if segment == segments.saturating_sub(1) && segments > 2 {
+        target.scatter = target.scatter.min(0.0);
     }
+    feel.ease_toward(&target, (time.delta_secs() * 2.5).min(1.0));
 }
 
 /// Palette-wash duration (spec 1g: "palette wash 0.8s").
@@ -602,16 +690,20 @@ pub fn animate_world(
     }
 
     // The particle field's emissive breathes with the live high band
-    // ("sparkle") — one shared-material write, no per-particle cost.
+    // ("sparkle") — one shared-material write, no per-particle cost. The
+    // section's presence verb fades the whole field (bridge strips, chorus
+    // swells) without respawning it.
     if let Some(handle) = &particle_field.material
         && let Some(mut material) = materials.get_mut(handle)
     {
+        let presence = feel.particles.clamp(0.0, 1.5);
         let sparkle = if comfort.reduce_flashing {
-            0.45
+            0.45 * presence
         } else {
-            (0.35 + beat.highs * 0.8 + beat.energy * 0.2).min(1.2)
+            ((0.35 + beat.highs * 0.8 + beat.energy * 0.2).min(1.2)) * presence
         };
         material.emissive = scaled_linear(particle_field.tint, sparkle);
+        material.base_color = particle_field.tint.with_alpha((0.7 * presence).min(0.9));
     }
 
     // Beat-reactive emissive on the shared drifter material. (Split out of a
@@ -772,6 +864,35 @@ fn scaled_linear_from(current: LinearRgba, intensity: f32) -> LinearRgba {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn positional_roles_shape_a_song() {
+        use crate::recipe::SectionRole as R;
+        assert_eq!(positional_role(0, 5), Some(R::Intro));
+        assert_eq!(positional_role(4, 5), Some(R::Outro));
+        assert_eq!(
+            positional_role(2, 5),
+            Some(R::Chorus),
+            "middle is the chorus"
+        );
+        // 3/4 point of 4 segments (n=4 boundaries → 4 segments): segment 3 is
+        // the last, so the bridge lands at 3 only when it isn't the outro.
+        assert_eq!(positional_role(1, 5), Some(R::Verse));
+    }
+
+    #[test]
+    fn section_feel_eases_toward_verbs() {
+        let mut f = SectionFeel::default();
+        let target = SectionFeel::verbs(Some(crate::recipe::SectionRole::Outro));
+        assert!(target.scatter < 0.01, "outro sinks the scatter");
+        for _ in 0..120 {
+            f.ease_toward(&target, 0.1);
+        }
+        assert!((f.scatter - target.scatter).abs() < 1e-3);
+        assert!(f.beacons < 0.75, "outro dims beacons");
+    }
+
     /// The exact easing step used by `sync_held_ring`.
     fn step(v: f32, frozen: bool, dt: f32) -> f32 {
         let target = frozen as u8 as f32;
