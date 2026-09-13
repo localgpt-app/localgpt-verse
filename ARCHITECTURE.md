@@ -195,3 +195,79 @@ full list); findings worth recording:
 - **bevy_gltf extension limits now documented:** no KHR_mesh_quantization,
   no EXT_meshopt_compression (0.19) — offline normalization packs
   uncompressed `.glb` (173 MB for 52 models).
+
+## 10. The LLM tiers (M7, runtime-verified 2026-09)
+
+The `llm` feature adds a local text LLM — **Bonsai-8B** (Qwen3-architecture
+8B chat model, prism-ml, Apache-2.0; we run the Q4_K_M GGUF via mistral.rs
+under the opt-in `llm-metal` feature). It is the *imagination layer only*: it
+never hears the song and never sees the scene. The division of labor:
+
+```
+audio file ─► symphonia decode + DSP (analysis.rs) ─► numbers (BPM, energy,
+                                                        sections, mood)
+                                                        │
+                                                        ▼
+                                        Bonsai (llm.rs / agent.rs): text in → text out
+                                                        │
+                                                        ▼
+                                  WorldRecipe JSON / tool-calls → Bevy renderer
+```
+
+All guardrails live on the Rust side: `WorldRecipe::clamped()` bounds every
+value, serde defaults patch partial output, and any failure degrades to the
+rule-derived world.
+
+### The recipe tier (`src/llm.rs`)
+
+Runs once per track (then cached in the sidecar forever).
+
+- **Input** — a two-message chat prompt. System: the WorldRecipe field
+  vocabulary (names, enums, ranges) and the taste constraints ("modulate
+  WITHIN the given mood, 1–2 biomes, 0–3 landmarks"). User: what the DSP
+  measured — `Mood: TIDE GARDENS (index must be 2). Tempo: 96 BPM. Mean
+  energy: medium. Sections: 5.`
+- **Output** — one JSON object. A real, verified example (model-authored for
+  `nightglass.mp3`): `{"world_name":"Tide Gardens", "biomes":[{mood:2,layout:
+  "spiral",density:0.7,tint:[1,1,1]}, {mood:1,layout:"grid",…}],
+  "landmarks":[{kind:"spire",at:"center",scale:1.5,emissive:0.7},…],
+  "atmosphere":{"fog_density":0.4,…}, "section_choreography":[{at_role:
+  "chorus",energy_shift:0.3,motion:"active"},…], "particles":{"kind":"spark",
+  "rate":0.6,drift:1.2}, "motion_speed":1.5, "density":0.8}`. The renderer
+  interprets it (fog band, prop count, landmarks with beacons, per-section
+  energy/motion/palette washes, particle field).
+
+Generation is plain instructed-JSON + a lenient balanced-object parse — see
+the mistral.rs constraints below.
+
+### The agent tier (`src/agent.rs`)
+
+The world-builder alternative: a tool-calling loop.
+
+- **Input** — a system prompt (song context + "8–16 structures") plus seven
+  JSON tool schemas: `spawn_primitive`, `place_asset`, `modify_entity`,
+  `delete_entity`, `set_light`, `set_environment`, `scene_info`. The
+  `place_asset` schema's enum **is** the 52-model manifest, so the model can
+  only name assets that exist.
+- **Output** — a sequence of chat turns, each either tool calls (executed by
+  the Bevy-side executor, results fed back, so it can review via
+  `scene_info` and iterate) or a closing text description. Verified sessions
+  issue 24 tool-calls (the step budget) and cache the command stream as a
+  `SceneBuild`, replayed deterministically on revisit — no LLM re-run.
+
+### mistral.rs 0.8 constraints (re-verify on any bump)
+
+Empirically established 2026-09 (M2 Max, 32 GB); the ignored
+`llm_generation_probe` test re-checks them:
+
+| Fact | Consequence |
+|---|---|
+| Q1_0 (native 1-bit) quants don't parse | fetch script ships Q4_K_M |
+| 5 GB Q4_K_M exceeds the CPU device map (~7.6 GB free beside the renderer) | `llm-metal` feature (macOS GPU); plain `llm` needs a smaller GGUF |
+| `generate_structured` (grammar-constrained) hangs on GGUF — even a two-field schema, 0 tokens over minutes — while plain chat runs ~25 tok/s | recipe tier uses plain generation + lenient parse |
+
+Observed performance: plain chat ~25 tok/s; a full recipe in 20–80 s per
+track (idea.md's "< song length" bar); agent sessions ~2.5 min. Known
+polish gaps: the model echoes mood names as `world_name` instead of
+inventing evocative ones, and agent sessions build to the budget without a
+closing description.
