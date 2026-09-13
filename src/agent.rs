@@ -60,8 +60,8 @@ use serde_json::{Value, json};
 // queries in every feature config).
 pub use crate::agent_types::{
     AgentAmbient, AgentCommand, AgentEntity, AgentLight, AgentResponse, EnvOverride,
-    EnvironmentCmd, ModifyEntityCmd, PlaceAssetCmd, PrimitiveShape, SceneBuild, SetLightCmd,
-    SpawnPrimitiveCmd,
+    EnvironmentCmd, ModifyEntityCmd, PlaceAssetCmd, PrimitiveShape, SceneBuild, SectionScoped,
+    SetLightCmd, SpawnPrimitiveCmd,
 };
 
 // The bridge's async channels are tokio mpsc (matches gen's pattern). The
@@ -160,7 +160,8 @@ pub fn tool_schemas(manifest: Option<&AssetManifest>) -> Vec<mistralrs::Tool> {
                     "color": {"type": "array", "items": {"type":"number"}, "default": [0.8,0.8,0.8,1.0], "description": "RGBA 0-1"},
                     "metallic": {"type": "number", "default": 0.0, "minimum": 0, "maximum": 1},
                     "roughness": {"type": "number", "default": 0.5, "minimum": 0, "maximum": 1},
-                    "emissive": {"type": "array", "items": {"type":"number"}, "default": [0,0,0,0], "description": "Glow color RGBA"}
+                    "emissive": {"type": "array", "items": {"type":"number"}, "default": [0,0,0,0], "description": "Glow color RGBA"},
+                    "at_role": {"type": "string", "enum": ["intro","verse","chorus","drop","bridge","outro"], "description": "Song section this structure appears in (stays hidden until then)"}
                 },
                 "required": ["name", "shape"]
             }),
@@ -243,7 +244,8 @@ pub fn tool_schemas(manifest: Option<&AssetManifest>) -> Vec<mistralrs::Tool> {
                         "asset": {"type": "string", "enum": files, "description": "Asset file to place"},
                         "position": {"type": "array", "items": {"type":"number"}, "default": [0,0,0]},
                         "rotation_degrees": {"type": "array", "items": {"type":"number"}, "default": [0,0,0]},
-                        "scale": {"type": "number", "default": 1.0, "description": "Uniform scale multiplier"}
+                        "scale": {"type": "number", "default": 1.0, "description": "Uniform scale multiplier"},
+                        "at_role": {"type": "string", "enum": ["intro","verse","chorus","drop","bridge","outro"], "description": "Song section this asset appears in (e.g. a gateway for the bridge, monuments on the chorus)"}
                     },
                     "required": ["name", "asset"]
                 }),
@@ -277,6 +279,7 @@ fn parse_tool_call(name: &str, args: &str) -> Option<AgentCommand> {
             metallic: args["metallic"].as_f64().unwrap_or(0.0) as f32,
             roughness: args["roughness"].as_f64().unwrap_or(0.5) as f32,
             emissive: parse_arr4(&args["emissive"]),
+            at_role: parse_role(args.get("at_role")),
         })),
         "place_asset" => Some(AgentCommand::PlaceAsset(PlaceAssetCmd {
             name: args["name"].as_str()?.into(),
@@ -284,6 +287,7 @@ fn parse_tool_call(name: &str, args: &str) -> Option<AgentCommand> {
             position: parse_arr3(&args["position"]),
             rotation_degrees: parse_arr3(&args["rotation_degrees"]),
             scale: args["scale"].as_f64().unwrap_or(1.0) as f32,
+            at_role: parse_role(args.get("at_role")),
         })),
         "modify_entity" => Some(AgentCommand::ModifyEntity(ModifyEntityCmd {
             name: args["name"].as_str()?.into(),
@@ -359,6 +363,12 @@ fn parse_arr4(v: &Value) -> [f32; 4] {
             .unwrap_or(1.0) as f32,
     ]
 }
+/// Parse an optional `at_role` tool argument ("chorus" → SectionRole).
+fn parse_role(v: Option<&Value>) -> Option<crate::recipe::SectionRole> {
+    let name = v?.as_str()?;
+    serde_json::from_value(serde_json::Value::String(name.to_string())).ok()
+}
+
 fn parse_opt_arr3(v: &Value) -> Option<[f32; 3]> {
     v.as_array().filter(|a| a.len() == 3).map(|_| parse_arr3(v))
 }
@@ -523,6 +533,14 @@ impl AgentExecutor {
                         Visibility::Hidden,
                     ))
                     .id();
+                if let Some(role) = c.at_role {
+                    commands
+                        .entity(entity)
+                        .insert(crate::agent_types::SectionScoped {
+                            role,
+                            track: track.clone(),
+                        });
+                }
                 self.registry.map.insert(c.name.clone(), entity);
                 AgentResponse::Spawned { name: c.name }
             }
@@ -562,6 +580,14 @@ impl AgentExecutor {
                         Visibility::Hidden,
                     ))
                     .id();
+                if let Some(role) = c.at_role {
+                    commands
+                        .entity(entity)
+                        .insert(crate::agent_types::SectionScoped {
+                            role,
+                            track: track.clone(),
+                        });
+                }
                 self.registry.map.insert(c.name.clone(), entity);
                 AgentResponse::AssetPlaced { name: c.name }
             }
@@ -893,6 +919,28 @@ pub fn drain_agent_commands(
     );
 }
 
+/// The segment a section role lands in, for `at_role` placement timing: the
+/// recipe's choreography mapping when it resolved one, else the positional
+/// shape of a song (mirrors `world::positional_role`, inverted).
+fn role_segment(
+    role: crate::recipe::SectionRole,
+    segments: usize,
+    moments: &[(usize, crate::recipe::SectionMoment)],
+) -> usize {
+    if let Some((idx, _)) = moments.iter().find(|(_, m)| m.at_role == role) {
+        return *idx;
+    }
+    use crate::recipe::SectionRole as R;
+    let n = segments.max(1);
+    match role {
+        R::Intro => 0,
+        R::Outro => n - 1,
+        R::Chorus | R::Drop => n / 2,
+        R::Bridge => (n * 3) / 4,
+        R::Verse => 1.min(n - 1),
+    }
+}
+
 /// Reveal the current track's agent scene and black out everyone else's.
 ///
 /// Entities spawned during a lookahead session carry that session's track id
@@ -900,11 +948,13 @@ pub fn drain_agent_commands(
 /// becomes the playing one, and applies the track-scoped background via
 /// [`EnvOverride`] (which `world.rs`'s palette wash reads). One frame of
 /// latency at worst — it runs every frame after the drain/replay systems.
+#[allow(clippy::too_many_arguments)]
 pub fn sync_agent_scene_scope(
     playback: Res<crate::playback::Playback>,
+    active_recipe: Res<crate::recipe::ActiveRecipe>,
     executor: Res<AgentExecutor>,
     mut env_override: ResMut<EnvOverride>,
-    mut meshes_q: Query<(&AgentEntity, &mut Visibility)>,
+    mut meshes_q: Query<(&AgentEntity, Option<&SectionScoped>, &mut Visibility)>,
     mut point_q: Query<(&AgentLight, &mut PointLight), Without<DirectionalLight>>,
     mut dir_q: Query<(&AgentLight, &mut DirectionalLight), Without<PointLight>>,
     mut ambient_q: Query<(&AgentAmbient, &mut AmbientLight)>,
@@ -915,8 +965,24 @@ pub fn sync_agent_scene_scope(
         .and_then(|t| t.id.clone());
     let is_current = |track: &str| current.as_deref() == Some(track);
 
-    for (agent, mut vis) in &mut meshes_q {
-        *vis = if is_current(&agent.track) {
+    let segments = playback.sections.len();
+    let current_segment = playback
+        .sections
+        .iter()
+        .filter(|&&s| s <= playback.fraction())
+        .count()
+        .saturating_sub(1);
+    for (agent, scoped, mut vis) in &mut meshes_q {
+        // Track scope first; then section scope — an `at_role` placement is
+        // visible only inside its section of the current track.
+        let visible = is_current(&agent.track)
+            && match scoped {
+                None => true,
+                Some(s) => {
+                    current_segment == role_segment(s.role, segments, &active_recipe.moments)
+                }
+            };
+        *vis = if visible {
             Visibility::Visible
         } else {
             Visibility::Hidden
@@ -1060,6 +1126,18 @@ pub fn run_session(
             .set_tool_choice(ToolChoice::Auto);
 
         'steps: for step in 0..MAX_AGENT_STEPS {
+            // Wrap-up nudge: give the agent a few calls' warning before the
+            // budget ends, so it reviews and closes with a description
+            // instead of being cut off mid-build (which loses the capture).
+            if step == MAX_AGENT_STEPS.saturating_sub(6) {
+                messages = messages.add_message(
+                    mistralrs::TextMessageRole::User,
+                    "You are nearing your tool budget. Use the remaining calls wisely \
+                     (scene_info if you must check), then FINISH by replying with a short \
+                     description of the world — no more tool calls."
+                        .to_string(),
+                );
+            }
             if cancel.is_cancelled() {
                 info!("agent: cancelled at step {step} — keeping what was built");
                 break;

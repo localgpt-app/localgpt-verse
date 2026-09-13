@@ -281,7 +281,10 @@ fn build_prompt(analysis: &TrackAnalysis) -> mistralrs::RequestBuilder {
     let system = "You design immersive 3D worlds for a music visualizer. Given a song's \
 analysis, reply with ONE JSON object (no prose, no code fences) describing how to dress \
 the world, with exactly these fields: \
-world_name (string), biomes (array of {mood: 0-3, layout: \"spiral\"|\"grid\"|\"rings\", \
+world_name (string — an inventive, evocative name of YOUR OWN that evokes this \
+specific song; never merely repeat the mood name, e.g. for Tide Gardens say \
+\"Kelp Cathedral at Blue Hour\"), \
+biomes (array of {mood: 0-3, layout: \"spiral\"|\"grid\"|\"rings\", \
 density: 0..1, tint: [r,g,b]}), landmarks (array of {kind: \"spire\"|\"gateway\"|\"mass\"|\
 \"monument\", at: \"center\"|\"cardinal\"|\"rim\", scale: 0.5..3, emissive: 0..1}), \
 atmosphere ({fog_density: 0..1, ambient_tint: [r,g,b], bloom_ceiling: 0..1}), \

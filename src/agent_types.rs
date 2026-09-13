@@ -68,6 +68,16 @@ pub struct AgentEntity {
     pub track: String,
 }
 
+/// An agent entity that belongs to a *section* of its track (the agent's
+/// `at_role` placement timing): revealed when the transport is in that
+/// section, hidden otherwise — structures that rise on the drop or appear
+/// only for the bridge.
+#[derive(Component)]
+pub struct SectionScoped {
+    pub role: crate::recipe::SectionRole,
+    pub track: String,
+}
+
 /// Marker for an agent-owned light, with its authored intensity so it can be
 /// zeroed while its track is not current and restored when it is.
 #[derive(Component)]
@@ -146,6 +156,11 @@ pub struct SpawnPrimitiveCmd {
     pub roughness: f32,
     #[serde(default = "zero4")]
     pub emissive: [f32; 4],
+    /// Song section this structure appears in — the entity stays hidden until
+    /// the transport reaches that section (and hides again after). `None` =
+    /// visible whenever its track is current.
+    #[serde(default)]
+    pub at_role: Option<crate::recipe::SectionRole>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,6 +189,9 @@ pub struct PlaceAssetCmd {
     /// Uniform scale multiplier on the asset's normalized placement size.
     #[serde(default = "one_f")]
     pub scale: f32,
+    /// Song section this placement appears in (`None` = with the track).
+    #[serde(default)]
+    pub at_role: Option<crate::recipe::SectionRole>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -306,6 +324,7 @@ mod tests {
                 metallic: 0.5,
                 roughness: 0.4,
                 emissive: [0.0, 0.0, 0.0, 0.0],
+                at_role: None,
             })],
             description: Some("a jagged neon skyline".into()),
         };
@@ -332,6 +351,7 @@ mod tests {
                 position: [0.0, 0.0, -6.0],
                 rotation_degrees: [0.0, 30.0, 0.0],
                 scale: 1.4,
+                at_role: None,
             })],
             ..Default::default()
         };
