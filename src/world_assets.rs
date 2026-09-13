@@ -463,6 +463,79 @@ pub fn load_asset_manifest(mut commands: Commands) {
     commands.insert_resource(WorldAssets { manifest });
 }
 
+// ---------------------------------------------------------------------------
+// Merged scatter field — the prop-ceiling unlock
+// ---------------------------------------------------------------------------
+
+/// How much denser the merged scatter field is than the per-entity scatter it
+/// replaces: one entity and one draw call, so the per-entity ceiling (measured
+/// ~90 props at 60 fps; 1k scene-roots at 14) no longer applies to ground
+/// cover. The world reads *denser* before it reads *cheaper*.
+const SCATTER_FIELD_BOOST: f32 = 4.0;
+
+/// Merged scatter geometry under construction — pebbles/shards/chips baked
+/// into one mesh with per-vertex tint, so hundreds of ground-cover instances
+/// cost one entity.
+#[derive(Default)]
+struct MergedScatter {
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    colors: Vec<[f32; 4]>,
+    indices: Vec<u32>,
+}
+
+impl MergedScatter {
+    /// Append one transformed copy of `base` (a unit primitive's mesh).
+    fn append(&mut self, base: &Mesh, pos: Vec3, rot: Quat, scale: f32, color: [f32; 4]) {
+        let offset = self.positions.len() as u32;
+        let verts = base
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .and_then(|v| v.as_float3())
+            .map(<[[f32; 3]]>::to_vec)
+            .unwrap_or_default();
+        let norms = base
+            .attribute(Mesh::ATTRIBUTE_NORMAL)
+            .and_then(|v| v.as_float3())
+            .map(<[[f32; 3]]>::to_vec)
+            .unwrap_or_default();
+        for (i, v) in verts.iter().enumerate() {
+            self.positions
+                .push((rot * Vec3::from(*v) * scale + pos).to_array());
+            let n = norms.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
+            self.normals
+                .push((rot * Vec3::from(n)).normalize_or_zero().to_array());
+            self.colors.push(color);
+        }
+        if let Some(indices) = base.indices() {
+            for i in indices.iter() {
+                self.indices.push(i as u32 + offset);
+            }
+        }
+    }
+
+    fn build(self) -> Mesh {
+        let mut mesh = Mesh::new(
+            bevy::render::render_resource::PrimitiveTopology::TriangleList,
+            default(),
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.positions);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, self.colors);
+        mesh.insert_indices(bevy::render::mesh::Indices::U32(self.indices));
+        mesh
+    }
+}
+
+/// The ground-cover pebble shape for a world's arrangement family: chips for
+/// city grids, shards for crystal rings and terraces, pebbles elsewhere.
+fn scatter_base_handle(arrangement: Arrangement, meshes: &mut Assets<Mesh>) -> Handle<Mesh> {
+    match arrangement {
+        Arrangement::Grid => meshes.add(Cuboid::new(1.0, 0.5, 1.0)),
+        Arrangement::Rings | Arrangement::Terraces => meshes.add(Tetrahedron::default().mesh()),
+        _ => meshes.add(Sphere::new(1.0).mesh().ico(1).unwrap()),
+    }
+}
+
 /// (Re)place ground props for the current mood on a mood change, rising in a
 /// materialize sequence that settles on the current track's first downbeat
 /// (when its analysis is already in — the next track is prefetched, so the
@@ -538,6 +611,10 @@ pub fn populate_world_props(
     // Seeded per-mood arrangement: same (mood, seed, recipe) → identical world.
     let mut rng = layout.seed ^ (mood as u64).wrapping_mul(0x9E37_79B9);
     let mut plan: Vec<PlannedProp> = Vec::new();
+    // Scatter positions accumulate here instead of entities — the tier becomes
+    // one merged mesh (see the field spawn below the plan).
+    let mut scatter_pts: Vec<Vec3> = Vec::new();
+    let mut placed = 0usize; // layout index across every class of placement
 
     // Primary mood props, three tiers, each assigned the section it rises in.
     // The extended moods (Cinder Reach, Mirage Circuit, …) borrow their base
@@ -559,7 +636,13 @@ pub fn populate_world_props(
     for entry in &entries {
         let count = (entry.tier.count() as f32 * density).round().max(1.0) as usize;
         for _ in 0..count {
-            let i = plan.len();
+            if entry.tier == Tier::Scatter {
+                scatter_pts.push(layout_position(arrangement, placed, &mut rng));
+                placed += 1;
+                continue;
+            }
+            let i = placed;
+            placed += 1;
             plan.push(PlannedProp {
                 file: entry.file.clone(),
                 pos: layout_position(arrangement, i, &mut rng),
@@ -569,11 +652,10 @@ pub fn populate_world_props(
                 beacon: None,
                 tier: entry.tier,
                 seg: match entry.tier {
-                    // Scatter carpet: the intro. Mediums: spread over the
-                    // verses. Heroes: land on the chorus.
-                    Tier::Scatter => 0,
+                    // Mediums spread over the verses; heroes land on the
+                    // chorus.
                     Tier::Medium => 1 + (i % chorus_seg.max(1)),
-                    Tier::Hero => chorus_seg,
+                    _ => chorus_seg,
                 },
             });
         }
@@ -774,9 +856,63 @@ pub fn populate_world_props(
         }
     }
 
+    // The merged scatter field: one entity, one draw, SCATTER_FIELD_BOOST×
+    // the per-entity density the old tier could afford — the ground cover
+    // now reads as a *field* rather than a scatter of samples. Vertex tints
+    // blend ground → accent; it rises with the intro and sinks on the outro
+    // like any scatter prop.
+    if !scatter_pts.is_empty() {
+        let target = (scatter_pts.len() as f32 * SCATTER_FIELD_BOOST).round() as usize;
+        while scatter_pts.len() < target {
+            scatter_pts.push(layout_position(arrangement, placed, &mut rng));
+            placed += 1;
+        }
+        let base = scatter_base_handle(arrangement, &mut meshes);
+        let base_mesh = meshes
+            .get(&base)
+            .cloned()
+            .expect("the base shape was just added to the asset store");
+        let ground_lin = theme.current().ground.to_linear();
+        let accent_lin = accent.to_linear();
+        let mut merged = MergedScatter::default();
+        for p in &scatter_pts {
+            let s = 0.18 + rand01(&mut rng) * 0.5;
+            let rot = Quat::from_rotation_y(rand01(&mut rng) * std::f32::consts::TAU);
+            let mix = rand01(&mut rng) * 0.55;
+            let color = [
+                ground_lin.red + (accent_lin.red - ground_lin.red) * mix,
+                ground_lin.green + (accent_lin.green - ground_lin.green) * mix,
+                ground_lin.blue + (accent_lin.blue - ground_lin.blue) * mix,
+                1.0,
+            ];
+            merged.append(&base_mesh, *p, rot, s, color);
+        }
+        let handle = meshes.add(merged.build());
+        let material = materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 0.95,
+            ..default()
+        });
+        commands.spawn((
+            WorldProp,
+            ScatterProp,
+            Mesh3d(handle),
+            MeshMaterial3d(material),
+            Transform::from_scale(Vec3::splat(0.01)),
+            PropRise {
+                delay: 0.35,
+                dur: 1.6,
+                target: Vec3::splat(1.0),
+                t: 0.0,
+            },
+        ));
+    }
+
     if total > 0 {
         info!(
-            "Placed {total} props for {} (settle {settle:.2}s, density {density:.2})",
+            "Placed {total} props + {} merged scatter for {} \
+             (settle {settle:.2}s, density {density:.2})",
+            scatter_pts.len(),
             crate::theme::moods()[mood].world_name
         );
     }
