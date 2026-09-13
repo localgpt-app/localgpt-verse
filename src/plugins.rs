@@ -133,6 +133,7 @@ impl Plugin for WorldPlugin {
             .init_resource::<crate::agent_types::EnvOverride>()
             .add_systems(Startup, world::setup_world)
             .add_systems(Update, (crate::ease_world_clock, world::spawn_particles))
+            .add_systems(Update, world::ground_waves)
             // Choreography first (it may trigger a wash), then the wash writes
             // hues before the beat-glow rescale reads them.
             .add_systems(

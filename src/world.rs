@@ -66,6 +66,60 @@ pub struct ParticleField {
     pub tint: Color,
 }
 
+/// The ground as an instrument: a subdivided plane displaced by a radial wave
+/// field whose amplitude rides the bass (the Demucs curve when present, else
+/// the live band). Marked so [`ground_waves`] owns its vertices.
+#[derive(Component)]
+pub struct GroundWaves;
+
+/// Displace the ground each frame with a bass-driven wave field — a radial
+/// ripple from the world's centre plus a slower diagonal swell, both faded by
+/// distance so the rim stays still. Comfort › gentler world motion halves the
+/// amplitude; pause freezes it with everything else (world-clock driven).
+pub fn ground_waves(
+    time: Res<Time>,
+    clock: Res<WorldClock>,
+    beat: Res<Beat>,
+    stems: Res<crate::playback::StemLevels>,
+    comfort: Res<crate::Comfort>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    ground: Query<&Mesh3d, With<GroundWaves>>,
+) {
+    let Ok(handle) = ground.single() else {
+        return;
+    };
+    // Copy the base positions out first — the attribute borrow must end
+    // before `insert_attribute` mutates the mesh. ~4k verts, cheap.
+    let verts: Vec<[f32; 3]> = {
+        let Some(mesh) = meshes.get(&handle.0) else {
+            return;
+        };
+        let Some(values) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+            return;
+        };
+        values.as_float3().unwrap_or(&[]).to_vec()
+    };
+
+    let t = time.elapsed_secs() * clock.speed;
+    let gentle = if comfort.gentler_motion { 0.4 } else { 1.0 };
+    let bass = stems.0[1].max(beat.bass);
+    let amp = (0.10 + bass * 0.85) * gentle;
+    let moved: Vec<[f32; 3]> = verts
+        .iter()
+        .map(|v| {
+            let (x, z) = (v[0], v[2]);
+            let r = (x * x + z * z).sqrt();
+            let env = 1.0 / (1.0 + r * 0.05);
+            let ripple = (r * 0.55 - t * 2.2).sin() * 0.7;
+            let swell = (x * 0.12 + t * 0.8).sin() * (z * 0.10 - t * 0.6).sin() * 0.45;
+            [x, -0.5 + amp * (ripple + swell) * env, z]
+        })
+        .collect();
+    if let Some(mut mesh) = meshes.get_mut(&handle.0) {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, moved);
+    }
+}
+
 /// Handles to the shared world materials so palette swaps are cheap.
 #[derive(Resource)]
 pub struct WorldMaterials {
@@ -148,9 +202,17 @@ pub fn setup_world(
         drifter: drifter_mat.clone(),
     });
 
-    // Ground.
+    // Ground — subdivided so the wave field has vertices to displace.
     commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(240.0, 240.0))),
+        GroundWaves,
+        Mesh3d(
+            meshes.add(
+                Plane3d::default()
+                    .mesh()
+                    .size(240.0, 240.0)
+                    .subdivisions(64),
+            ),
+        ),
         MeshMaterial3d(ground_mat),
         Transform::from_xyz(0.0, -0.5, 0.0),
     ));
