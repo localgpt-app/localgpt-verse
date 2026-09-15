@@ -112,7 +112,7 @@ fn spawn_pause(
             c.spawn((
                 rounded(
                     Node {
-                        width: Val::Px(460.0),
+                        width: Val::Px(640.0),
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
                         padding: UiRect::all(Val::Px(34.0)),
