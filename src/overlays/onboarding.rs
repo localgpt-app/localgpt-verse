@@ -78,9 +78,13 @@ fn build_onboarding(commands: &mut Commands, fonts: &Fonts, theme: &Theme, step:
                     .with_children(|col| {
                         onboard_control_row(col, fonts, "Move", "W A S D", "LS");
                         onboard_control_row(col, fonts, "Look", "Mouse", "RS");
+                        onboard_control_row(col, fonts, "Fly up · down", "Space · Shift", "LB · RB");
+                        onboard_control_row(col, fonts, "Fly speed", "Scroll", "-");
                         onboard_control_row(col, fonts, "Send a pulse", "E", "X");
                         onboard_control_row(col, fonts, "Queue · Pause", "Tab · Esc", "View · B");
                     });
+                    spacer(c, 14.0);
+                    label_text(c, fonts, "Explore holds the mouse for 360° look — Esc frees it", 11.0, theme::text_muted().with_alpha(0.6), false);
                     spacer(c, 26.0);
                     button(c, fonts, "Next", None, ButtonAction::OnboardNext, true, accent);
                 }

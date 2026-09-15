@@ -8,14 +8,15 @@
 
 use bevy::camera::Hdr;
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::input::mouse::AccumulatedMouseMotion;
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy::pbr::DistanceFog;
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 
 use crate::playback::{Beat, Playback};
 use crate::theme::Theme;
-use crate::{CameraMode, WorldClock};
+use crate::{CameraMode, OverlayStack, Paused, QueueOpen, WorldClock};
 
 /// Marker for the single world camera.
 #[derive(Component)]
@@ -23,6 +24,8 @@ pub struct WorldCamera {
     /// Yaw/pitch used in Explore mode.
     pub yaw: f32,
     pub pitch: f32,
+    /// Explore fly speed in m/s; the scroll wheel trims it while locked.
+    pub fly_speed: f32,
     /// Auto-orbit angle used in Drift mode.
     pub orbit: f32,
     /// Eased orbit radius/height for Drift choreography (metres).
@@ -168,6 +171,7 @@ pub fn setup_world(
         WorldCamera {
             yaw: 0.0,
             pitch: -0.08,
+            fly_speed: 7.0,
             orbit: 0.0,
             eased_radius: 16.0,
             eased_height: 3.0,
@@ -824,7 +828,7 @@ pub fn animate_world(
 }
 
 /// Camera feel: Drift auto-orbits with section-aware choreography; Explore is
-/// WASD + mouse-look.
+/// a pointer-locked first-person fly cam (WASD + Space/Shift, scroll for speed).
 ///
 /// The Drift rig reads the section feel: calm sections pull up and out for the
 /// overview, active ones drop in low and close, and the quiet ends (intro,
@@ -840,7 +844,8 @@ pub fn camera_control(
     mode: Res<CameraMode>,
     keys: Res<ButtonInput<KeyCode>>,
     motion: Res<AccumulatedMouseMotion>,
-    window_q: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
+    scroll: Res<AccumulatedMouseScroll>,
+    cursor_q: Query<&CursorOptions, With<PrimaryWindow>>,
     mut cam_q: Query<(&mut Transform, &mut WorldCamera)>,
 ) {
     let Ok((mut tf, mut cam)) = cam_q.single_mut() else {
@@ -871,44 +876,86 @@ pub fn camera_control(
             tf.look_at(target, Vec3::Y);
         }
         CameraMode::Explore => {
-            // Mouse-look (no cursor grab — subtle, always-on) — but only while
-            // the cursor is over the window. Without this gate the OS keeps
-            // sending motion deltas after the mouse leaves, so the world would
-            // spin from off-window movement. `cursor_position()` is None when
-            // the cursor is outside the window bounds (and when unfocused).
-            let cursor_over_window = window_q
+            // Pointer-locked look: while grabbed, the OS streams raw deltas
+            // with no screen-edge limit, so yaw wraps freely through 360° and
+            // pitch swings from straight up to straight down. Unlocked means
+            // an overlay owns the cursor — don't steer the world from
+            // UI-bound mouse movement.
+            let locked = cursor_q
                 .single()
-                .map(|w| w.cursor_position().is_some())
+                .map(|c| c.grab_mode == CursorGrabMode::Locked)
                 .unwrap_or(false);
-            if cursor_over_window {
+            if locked {
                 let d = motion.delta;
                 cam.yaw -= d.x * 0.0022;
-                cam.pitch = (cam.pitch - d.y * 0.0022).clamp(-1.2, 0.6);
+                cam.pitch = (cam.pitch - d.y * 0.0022).clamp(-1.55, 1.55);
+                // Scroll trims fly speed; exponential steps feel even, and
+                // pixel-unit (trackpad) deltas are normalised to "notches".
+                let notches = match scroll.unit {
+                    MouseScrollUnit::Line => scroll.delta.y,
+                    MouseScrollUnit::Pixel => scroll.delta.y / 50.0,
+                };
+                cam.fly_speed = (cam.fly_speed * 1.15f32.powf(notches)).clamp(1.5, 40.0);
             }
             let rot = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0);
             tf.rotation = rot;
 
-            // WASD move on the yaw plane.
+            // Fly: WASD follows the view direction (W goes where you look,
+            // even pitched up/down); Space / Shift are pure vertical.
             let mut mv = Vec3::ZERO;
             let fwd = rot * Vec3::NEG_Z;
             let right = rot * Vec3::X;
-            let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z).normalize_or_zero();
             if keys.pressed(KeyCode::KeyW) {
-                mv += flat(fwd);
+                mv += fwd;
             }
             if keys.pressed(KeyCode::KeyS) {
-                mv -= flat(fwd);
+                mv -= fwd;
             }
             if keys.pressed(KeyCode::KeyD) {
-                mv += flat(right);
+                mv += right;
             }
             if keys.pressed(KeyCode::KeyA) {
-                mv -= flat(right);
+                mv -= right;
             }
-            tf.translation += mv.normalize_or_zero() * dt * 7.0;
-            tf.translation.y = tf.translation.y.clamp(0.8, 12.0);
+            if keys.pressed(KeyCode::Space) {
+                mv += Vec3::Y;
+            }
+            if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
+                mv -= Vec3::Y;
+            }
+            tf.translation += mv.normalize_or_zero() * dt * cam.fly_speed;
+            tf.translation.y = tf.translation.y.clamp(0.6, 60.0);
         }
     }
+}
+
+/// Reconcile who owns the pointer: Explore flies first-person with the cursor
+/// grabbed and hidden (raw deltas, no screen edge); anything that needs
+/// clicking — pause, the queue, a modal overlay, Drift's HUD tabs — releases
+/// it. Runs even while paused (unlike [`camera_control`]) so Esc always hands
+/// the cursor back to the pause menu, and re-locks on resume.
+pub fn update_cursor_grab(
+    mode: Res<CameraMode>,
+    paused: Res<Paused>,
+    queue_open: Res<QueueOpen>,
+    stack: Res<OverlayStack>,
+    mut cursor_q: Query<&mut CursorOptions, With<PrimaryWindow>>,
+) {
+    let Ok(mut cursor) = cursor_q.single_mut() else {
+        return;
+    };
+    let want_locked =
+        *mode == CameraMode::Explore && !paused.0 && !queue_open.0 && stack.is_empty();
+    let locked = cursor.grab_mode == CursorGrabMode::Locked;
+    if locked == want_locked {
+        return;
+    }
+    cursor.grab_mode = if want_locked {
+        CursorGrabMode::Locked
+    } else {
+        CursorGrabMode::None
+    };
+    cursor.visible = !want_locked;
 }
 
 /// Drive the pause "held ring" (spec 1e): ease its visibility in (~220ms) while

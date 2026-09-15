@@ -155,6 +155,10 @@ impl Plugin for WorldPlugin {
             )
             .add_systems(
                 Update,
+                world::update_cursor_grab.run_if(in_state(AppState::InWorld)),
+            )
+            .add_systems(
+                Update,
                 world::camera_control
                     .run_if(in_state(AppState::InWorld))
                     .run_if(crate::not_paused),

@@ -54,7 +54,7 @@ pub enum AppState {
     Resource, Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize,
 )]
 pub enum CameraMode {
-    /// First-person WASD + mouse-look.
+    /// First-person fly cam: pointer-locked 360° look, WASD + Space/Shift.
     #[default]
     Explore,
     /// Hands-off cinematic auto-orbit.
@@ -105,6 +105,9 @@ impl OverlayStack {
     }
     pub fn is_open(&self, overlay: Overlay) -> bool {
         self.0.contains(&overlay)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
     pub fn clear(&mut self) {
         self.0.clear();
@@ -555,6 +558,7 @@ fn input_first_run(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState<A
 fn input_in_world(
     keys: Res<ButtonInput<KeyCode>>,
     motion: Res<bevy::input::mouse::AccumulatedMouseMotion>,
+    window_q: Query<&bevy::window::CursorOptions, With<bevy::window::PrimaryWindow>>,
     mut paused: ResMut<Paused>,
     mut queue_open: ResMut<QueueOpen>,
     mut stack: ResMut<OverlayStack>,
@@ -568,7 +572,14 @@ fn input_in_world(
     mut seek: ResMut<SeekRequest>,
     mut volume: ResMut<Volume>,
 ) {
-    let mut wake = keys.get_just_pressed().len() > 0 || motion.delta != Vec2::ZERO;
+    // Mouse movement wakes the HUD only while the pointer is free — when
+    // Explore holds the lock, the mouse is the camera, not a HUD affordance.
+    let pointer_locked = window_q
+        .single()
+        .map(|c| c.grab_mode == bevy::window::CursorGrabMode::Locked)
+        .unwrap_or(false);
+    let mut wake =
+        keys.get_just_pressed().len() > 0 || (motion.delta != Vec2::ZERO && !pointer_locked);
 
     // Volume: -/= (and numpad) nudge the fader; the apply system tweens it.
     if keys.just_pressed(KeyCode::Minus) || keys.just_pressed(KeyCode::NumpadSubtract) {

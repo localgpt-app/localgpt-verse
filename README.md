@@ -83,8 +83,10 @@ renders the manifest.
 
 | Key | Action |
 |-----|--------|
-| `W A S D` + mouse | Move / look (Explore mode) |
-| `F` / click tabs | Toggle Explore / Drift camera |
+| `W A S D` + mouse | Fly / look (Explore locks the pointer — full 360°, straight up/down) |
+| `Space` / `Shift` | Fly up / down (Explore) |
+| Scroll | Fly speed (Explore) |
+| `F` / click tabs | Toggle Explore / Drift camera (Drift frees the cursor) |
 | `E` | Send a pulse |
 | `N` | Next track |
 | `Tab` | Open / close the queue |
