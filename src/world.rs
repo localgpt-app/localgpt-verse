@@ -9,10 +9,10 @@
 use bevy::camera::Hdr;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
-use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use bevy::pbr::DistanceFog;
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::playback::{Beat, Playback};
 use crate::theme::Theme;
