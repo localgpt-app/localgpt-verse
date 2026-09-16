@@ -5,9 +5,12 @@
 # Usage: scripts/bundle.sh
 #   REVERIE_ASSETS=<path>  override the reverie-assets checkout location
 #
-# Produces apps/reverie/dist/ with the release binary + assets/. The bundle is
-# portable: on machines without the build tree, the binary resolves assets
-# relative to its working directory (see world_assets::asset_root).
+# Produces apps/reverie/dist/ with the release binary + assets/ beside it. The
+# bundle is portable and launchable from anywhere: the binary resolves assets
+# from its own directory, not the working directory (world_assets::asset_root).
+# Platform packaging builds on this layout — a macOS .app instead puts assets/
+# in Contents/Resources/, and a packager that needs a third layout (a Flatpak
+# installing to /app/share) sets REVERIE_ASSET_ROOT in the launcher.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -42,4 +45,4 @@ else
 fi
 
 du -sh dist
-echo "done: $(pwd)/dist — run ./reverie from inside dist/"
+echo "done: $(pwd)/dist — run dist/reverie from anywhere"

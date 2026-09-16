@@ -511,16 +511,58 @@ pub fn rise_props(
     }
 }
 
-/// The asset root Bevy uses: `CARGO_MANIFEST_DIR/assets` under `cargo run`
-/// (baked at compile time, matching Bevy's own resolution), else `assets`
-/// relative to the working dir (shipped/exe-relative).
+/// The directory Reverie loads bundled assets from.
+///
+/// Everything resolves through here: the Bevy asset server (pinned to this
+/// path via `AssetPlugin::file_path` in `main`) and the direct-filesystem
+/// readers that can't go through it — the model manifest (also read off the
+/// analysis worker thread), the fonts, the ML/LLM models, the starter music.
+/// One root means those two halves cannot disagree about where `assets/` is.
+///
+/// Resolved once, in this order:
+/// 1. `REVERIE_ASSET_ROOT` — explicit override.
+/// 2. `<exe dir>/assets` — the shipped layout (`scripts/bundle.sh`, the
+///    Windows zip, the Linux tarball).
+/// 3. `<exe dir>/../Resources/assets` — inside a macOS `.app`, where the
+///    binary sits in `Contents/MacOS/` and its data in `Contents/Resources/`.
+/// 4. `CARGO_MANIFEST_DIR/assets` — the dev tree, baked at compile time, so
+///    `cargo run` and a bare `target/release/reverie` work from any cwd.
+/// 5. `assets` — relative last resort.
+///
+/// Exe-relative comes before the dev tree so a packaged build never prefers a
+/// stale source checkout that happens to exist on the machine that built it.
+/// Nothing else is cwd-relative: a bundle launched from Finder or a Start Menu
+/// shortcut gets a working directory unrelated to where it was installed.
 pub(crate) fn asset_root() -> std::path::PathBuf {
-    let compiled = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
-    if compiled.exists() {
-        compiled
-    } else {
-        std::path::PathBuf::from("assets")
+    static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(resolve_asset_root).clone()
+}
+
+fn resolve_asset_root() -> std::path::PathBuf {
+    if let Some(over) = std::env::var_os("REVERIE_ASSET_ROOT") {
+        return std::path::PathBuf::from(over);
     }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let beside_exe = dir.join("assets");
+        if beside_exe.is_dir() {
+            return beside_exe;
+        }
+        // `Contents/MacOS/reverie` → `Contents/Resources/assets`. Harmless to
+        // probe elsewhere; no other platform lays a bundle out this way.
+        if let Some(contents) = dir.parent() {
+            let in_bundle = contents.join("Resources").join("assets");
+            if in_bundle.is_dir() {
+                return in_bundle;
+            }
+        }
+    }
+    let dev_tree = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    if dev_tree.is_dir() {
+        return dev_tree;
+    }
+    std::path::PathBuf::from("assets")
 }
 
 /// Read `assets/models/manifest.json` from disk if present. Used both by the
@@ -1308,6 +1350,26 @@ pub fn stress_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A relative root is the packaging bug: it happens to work while the
+    /// working directory is the app's own (`cargo run`, `./reverie` inside
+    /// `dist/`) and silently resolves to nothing the moment the app is
+    /// launched from Finder or a shortcut — no models, no fonts, no starter
+    /// music, no ML tiers, and a procedural world instead of an error.
+    #[test]
+    fn asset_root_is_an_absolute_directory() {
+        let root = asset_root();
+        assert!(
+            root.is_absolute(),
+            "asset root fell through to a relative path: {}",
+            root.display()
+        );
+        assert!(
+            root.is_dir(),
+            "asset root is not a directory: {}",
+            root.display()
+        );
+    }
 
     fn entry(file: &str, name: &str, tier: Tier) -> AssetEntry {
         AssetEntry {

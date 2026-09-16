@@ -208,10 +208,25 @@ fn main() {
     }
 
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(window),
-        ..default()
-    }))
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(window),
+                ..default()
+            })
+            // Pin the asset server to the one root the direct-filesystem
+            // readers also use (see `world_assets::asset_root`). Bevy's own
+            // default is `<exe dir>/assets` — but only when `CARGO_MANIFEST_DIR`
+            // is absent from the *environment*, which is true for a packaged
+            // app and false under `cargo run`. Leaving it implicit lets the two
+            // halves resolve differently; an absolute `file_path` settles it,
+            // since Bevy joins this onto its base path and joining an absolute
+            // path discards the base.
+            .set(AssetPlugin {
+                file_path: world_assets::asset_root().to_string_lossy().into_owned(),
+                ..default()
+            }),
+    )
     // What the app is made of; see `plugins`.
     .add_plugins(plugins::ReveriePlugins);
 
