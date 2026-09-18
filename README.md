@@ -155,3 +155,12 @@ REVERIE_STRESS=0 cargo run --release         # control run: report only, no extr
 Runs uncapped (vsync off) so the numbers show true frame cost. On the dev
 machine (2026-07): baseline world ~60 fps, ~1k props ≈ 14 fps, 5k ≈ 9 fps —
 dense packs beyond that need real instancing (PLAN.md status).
+
+## License
+
+Reverie's code is licensed under the [Apache License 2.0](LICENSE). The bundled
+fonts (Marcellus, Hanken Grotesk) are under the SIL Open Font License 1.1 — see
+[`assets/fonts/`](assets/fonts/). The 3D model pack and the starter music live in
+the separate `reverie-assets` repository and are dedicated to the public domain
+under CC0 1.0. The optional model downloads (`scripts/fetch-*.sh`) carry their
+own licenses; the CLAP weights in particular are CC-BY-NC.
