@@ -4,8 +4,9 @@
 #
 # Usage: scripts/bundle.sh
 #   REVERIE_ASSETS=<path>  override the reverie-assets checkout location
+#                          (default: ../reverie-assets, a sibling checkout)
 #
-# Produces apps/reverie/dist/ with the release binary + assets/ beside it. The
+# Produces dist/ with the release binary + assets/ beside it. The
 # bundle is portable and launchable from anywhere: the binary resolves assets
 # from its own directory, not the working directory (world_assets::asset_root).
 # Platform packaging builds on this layout — a macOS .app instead puts assets/
@@ -14,7 +15,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ASSETS_REPO="${REVERIE_ASSETS:-../../../reverie-assets}"
+ASSETS_REPO="${REVERIE_ASSETS:-../reverie-assets}"
 
 echo "==> release build"
 cargo build --release
@@ -22,7 +23,7 @@ cargo build --release
 echo "==> assembling dist/"
 rm -rf dist
 mkdir -p dist/assets
-cp target/release/reverie dist/
+cp "${CARGO_TARGET_DIR:-target}/release/reverie" dist/
 cp -R assets/fonts dist/assets/fonts
 
 if [ -d "$ASSETS_REPO/models" ]; then
