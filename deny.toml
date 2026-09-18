@@ -1,0 +1,53 @@
+# cargo-deny policy for Reverie — https://embarkstudios.github.io/cargo-deny/
+#
+# CI runs this file as two jobs (.github/workflows/ci.yml):
+# - licenses, bans, sources — blocking. These only change when Cargo.lock does,
+#   so a failure always means a dependency change needs a decision.
+# - advisories — reported, not blocking. The RustSec database changes on its
+#   own schedule, so this check can start failing on code that hasn't moved.
+#
+# Run locally: cargo deny check
+
+[graph]
+# Cover the opt-in `ml` / `llm` tiers too: they ship in some builds.
+all-features = true
+
+[advisories]
+ignore = [
+]
+
+[licenses]
+# LocalGPT's permissive allowlist, plus 0BSD (public-domain-equivalent, no
+# conditions at all). 0BSD arrives via mistralrs -> interprocess ->
+# doctest-file (a build-time proc-macro) and recvmsg (Windows-only).
+allow = [
+    "0BSD",
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "BSL-1.0",
+    "OFL-1.1",
+    "NCSA",
+    "CC0-1.0",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+    "Ubuntu-font-1.0",
+]
+confidence-threshold = 0.8
+# A shared policy list: not every entry occurs in this dependency tree.
+unused-allowed-license = "allow"
+
+[bans]
+# Bevy's tree carries several duplicate versions; surface them, don't fail.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

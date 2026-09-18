@@ -54,3 +54,25 @@ jobs:
           ORT_LIB_LOCATION: /opt/onnxruntime/lib
           ORT_PREFER_DYNAMIC_LINK: "1"
 
+  # Licenses, bans and sources only change when Cargo.lock does, so they gate
+  # every change. Policy lives in deny.toml.
+  dependency-policy:
+    name: Dependency policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans sources
+
+  # Advisories change with the RustSec database, not with this repo, so they
+  # report without blocking merges on code that didn't move.
+  advisories:
+    name: Security advisories
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
