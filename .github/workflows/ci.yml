@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Tests are headless (DSP/logic); no GPU or display server needed.
+  build:
+    name: Build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      # libwayland-dev: Bevy's Linux windowing builds wayland-sys, whose build
+      # script needs wayland-client from pkg-config.
+      - name: Install Bevy/audio build deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev pkg-config
+      - run: cargo fmt -- --check
+      - run: cargo clippy --tests -- -D warnings
+      - run: cargo test
+      # The opt-in tiers (ml: ort/CLAP/Demucs; llm: mistralrs recipes + agent)
+      # are compiled by neither of the steps above — without these gates the
+      # gated code could rot broken while default-feature CI stays green.
+      # Check only (no clippy/tests): both pull heavy native deps; the goal is
+      # "it compiles", the lint bar stays on the default build.
+      - run: cargo check --features llm
+      # ort-sys would otherwise fetch ONNX Runtime from cdn.pyke.io, which
+      # GitHub-hosted runners can't reach, so point it at Microsoft's release.
+      # 1.23 is the runtime ort 2.0.0-rc.11 targets.
+      - name: Cache ONNX Runtime
+        id: cache-ort
+        uses: actions/cache@v4
+        with:
+          path: /opt/onnxruntime
+          key: onnxruntime-1.23.2-linux-x64
+      - name: Download ONNX Runtime 1.23.2
+        if: steps.cache-ort.outputs.cache-hit != 'true'
+        run: |
+          curl -fL "https://github.com/microsoft/onnxruntime/releases/download/v1.23.2/onnxruntime-linux-x64-1.23.2.tgz" \
+            -o /tmp/onnxruntime.tgz
+          mkdir -p /opt/onnxruntime
+          tar -xzf /tmp/onnxruntime.tgz --strip-components=1 -C /opt/onnxruntime
+      - run: cargo check --features ml
+        env:
+          ORT_LIB_LOCATION: /opt/onnxruntime/lib
+          ORT_PREFER_DYNAMIC_LINK: "1"
+
