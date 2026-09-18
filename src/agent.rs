@@ -8,7 +8,7 @@
 //! results, and iterates. The world is authored by the LLM, not just
 //! parameterized by it.
 //!
-//! # Architecture (mirrors `crates/gen/src/gen3d`, trimmed to essentials)
+//! # Architecture (mirrors LocalGPT's `crates/gen/src/gen3d`, trimmed to essentials)
 //!
 //! ```text
 //! ┌──────────────────────────┐   mpsc channels   ┌─────────────────────┐

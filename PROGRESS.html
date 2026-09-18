@@ -283,9 +283,7 @@
   </table>
 
   <h2>Verify the current state yourself</h2>
-<pre><code>cd apps/reverie
-
-# Lint + tests (default and llm features)
+<pre><code># Lint + tests (default and llm features)
 cargo clippy --tests -- -D warnings
 cargo clippy --tests --features llm -- -D warnings
 cargo test && cargo test --features llm
@@ -306,7 +304,7 @@ cargo test --features llm-metal -- --ignored --nocapture llm_generation_probe</c
 
   <footer>Maintained alongside <code>PLAN.md</code>’s status notes — update this page in the
      same commit that changes tier status. Open directly in a browser
-     (<code>open apps/reverie/PROGRESS.html</code>); no build step, no dependencies.</footer>
+     (<code>open PROGRESS.html</code>); no build step, no dependencies.</footer>
 </main>
 </body>
 </html>

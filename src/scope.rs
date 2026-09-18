@@ -1,7 +1,7 @@
 //! Scoped teardown — every registration carries its own undo.
 //!
 //! Ported from the effect/fiber discipline in `deepseek-harness` (Cordis); see
-//! `docs/architecture/plugin/` in the repo root for the review this came from.
+//! LocalGPT's `docs/architecture/plugin/` for the review this came from.
 //! The rule is the whole idea:
 //!
 //! > A registration that cannot be undone is a registration that requires a
@@ -33,10 +33,10 @@
 //! disposers after it; a **panic** propagates, because continuing to mutate a
 //! `World` that a disposer panicked halfway through is worse than failing loudly.
 //!
-//! # Divergence from the future `crates/core` port: disposers are sync
+//! # Divergence from the future LocalGPT `crates/core` port: disposers are sync
 //!
 //! Bevy's schedule has no async, so disposal is `FnOnce(&mut World)` run from an
-//! exclusive system. The `crates/core` version of this will need async disposers
+//! exclusive system. LocalGPT's `crates/core` version will need async disposers
 //! awaited to quiescence. The discipline is identical; the signature is
 //! host-specific.
 //!

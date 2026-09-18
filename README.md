@@ -10,14 +10,12 @@ implemented on Bevy UI over a placeholder, mood-tinted 3D world. The music
 analysis + asset-assembly pipeline comes later; for now the transport and beat
 are simulated (`src/playback.rs`) so the HUD is already wired to react.
 
-Reverie is a **standalone Cargo project** (it declares its own `[workspace]`),
-intentionally excluded from the main `localgpt` workspace build and CI — the
-same way the other `apps/` entries are separate from `crates/*`.
+Reverie is a **standalone Cargo project**: it declares its own `[workspace]`,
+so it builds the same on its own or checked out inside another Cargo workspace.
 
 ## Run
 
 ```bash
-cd apps/reverie
 cargo run
 ```
 

@@ -41,7 +41,7 @@ replace the simulation with the real thing described in `idea.md`:
 |---|---|---|---|
 | Decode | **symphonia** | Pure Rust; MP3/FLAC/WAV/OGG(Vorbis)/AAC/ALAC, AIFF in recent releases (verify the `aiff`/riff feature at pin time). Also what kira uses internally. | MPL-2.0 |
 | Playback engine | **kira** (directly, *not* bevy_kira_audio) | Game-audio mixer on cpal with the three features the spec demands for free: **precise clocks** (schedule a start/crossfade on a musical boundary), **tweens** (6–10s equal-power crossfades, pause "time-dilation" as a tween on a track volume/rate), and **custom `Effect`s** (our FFT tap inside the audio thread). Symphonia loading built in. Engine-agnostic → immune to Bevy version lag. | MIT/Apache-2.0 |
-| Device output | cpal (transitively via kira) | Already proven in `crates/gen` on this repo's targets. | Apache-2.0 |
+| Device output | cpal (transitively via kira) | Already proven in LocalGPT's `crates/gen` on the same targets. | Apache-2.0 |
 | Tags/metadata | **lofty** | Title/artist/duration for the queue + library rows. | MIT/Apache-2.0 |
 | Folder import | **rfd** (native folder picker) + **walkdir** | "Choose your music folder…" opens the OS picker (spec 1j). rfd must run on the main thread on macOS — call it from a Bevy system, or use `AsyncFileDialog`. | MIT |
 | Loudness | **ebur128** | EBU R128 integrated loudness + short-term envelope: volume normalization across the queue and a robust energy curve. | MIT |
@@ -320,7 +320,7 @@ large).
 
 - **kira position/scheduling granularity** for "settle on the downbeat" —
   prototype in M1; fallback is gen-style custom cpal mixer (pattern already in
-  `crates/gen`).
+  LocalGPT's `crates/gen`).
 - **AIFF coverage** in kira's symphonia features — if gapped, decode AIFF
   ourselves into a kira static sound (raw frames), or trim the onboarding
   format line.
@@ -338,7 +338,7 @@ large).
 1. **Starter pack location & distribution — decided.**
    - *Source control (dev):* a separate `reverie-assets` repo (monorepo
      `*-assets` convention), cloned alongside the app; the app repo keeps only
-     fonts + fallback primitives. `apps/reverie/assets/models/` is gitignored
+     fonts + fallback primitives. `assets/models/` is gitignored
      in the app repo and populated from `reverie-assets`.
    - *Distribution (ship):* the packaging step **bundles** the vetted pack into
      the app download — **no first-run asset download**. Rationale: preserves
