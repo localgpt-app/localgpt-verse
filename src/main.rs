@@ -528,7 +528,9 @@ fn photo_black_check(event: On<ScreenshotCaptured>, mut photo: ResMut<Photo>) {
     };
     // Sample every ~97th RGBA pixel; ignore alpha (opaque even on black frames).
     let black = data
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .step_by(97)
         .all(|px| px[0] < 8 && px[1] < 8 && px[2] < 8);
     if black && photo.retries < 3 {

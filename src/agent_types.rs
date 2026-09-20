@@ -127,6 +127,10 @@ pub enum AgentCommand {
     /// `place_asset` in the agent toolset) — the asset-vocabulary sibling of
     /// `spawn_primitive`.
     PlaceAsset(PlaceAssetCmd),
+    /// Scatter many small assets of one kind around a point in a single call
+    /// (see `scatter_field`) — the per-token richness multiplier: one tool
+    /// call becomes a field of variants.
+    ScatterField(ScatterFieldCmd),
     ModifyEntity(ModifyEntityCmd),
     DeleteEntity {
         name: String,
@@ -175,12 +179,23 @@ pub enum PrimitiveShape {
 }
 
 /// Place a curated manifest asset (CC0 glTF) into the world.
+///
+/// Two-level vocabulary (the "kind" unlock): the LLM names a *semantic kind*
+/// (`rock`, `tree`, `lamp`, …) from a small stable enum; the host resolves it
+/// to a concrete manifest variant — preferring the track's mood and rotating
+/// so repeats differ — and records both. `asset` carries the resolved file
+/// (relative to `assets/models/`); on replay the executor uses it directly, so
+/// a cached build rebuilds identically even if the variant pool has grown.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaceAssetCmd {
     pub name: String,
-    /// The manifest entry's `file` (relative to `assets/models/`). The tool
-    /// schema enumerates the valid values, so the model literally cannot name
-    /// an asset that isn't there.
+    /// Semantic kind the model asked for (the tool enum). Empty on sidecars
+    /// written before kinds existed — those carry only the resolved `asset`.
+    #[serde(default)]
+    pub kind: String,
+    /// The resolved manifest entry's `file` (relative to `assets/models/`).
+    /// Empty only between parse and resolution inside a live session.
+    #[serde(default)]
     pub asset: String,
     #[serde(default = "zero3")]
     pub position: [f32; 3],
@@ -190,6 +205,38 @@ pub struct PlaceAssetCmd {
     #[serde(default = "one_f")]
     pub scale: f32,
     /// Song section this placement appears in (`None` = with the track).
+    #[serde(default)]
+    pub at_role: Option<crate::recipe::SectionRole>,
+}
+
+/// Scatter many assets of one kind around a position in one command — a field
+/// of rocks, a drift of shells — without a `place_asset` call per instance.
+///
+/// The resolved variant list (up to four files of the kind, mood-preferred)
+/// is recorded so replay is exact; the executor cycles it across the count,
+/// jittering each instance's position/rotation/scale from a seed derived from
+/// the session track and field name (deterministic replay, ARCHITECTURE R6).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScatterFieldCmd {
+    /// Unique prefix; instances are named `{name}_1` … `{name}_{count}`.
+    pub name: String,
+    /// Semantic kind (mirrors `place_asset`).
+    #[serde(default)]
+    pub kind: String,
+    /// Resolved variant files, cycled across the instances (1..=4 entries).
+    #[serde(default)]
+    pub assets: Vec<String>,
+    /// How many instances to place (already clamped 1..=48 at parse).
+    pub count: u32,
+    /// Scatter disk radius in metres around `position`.
+    #[serde(default = "ten_f")]
+    pub radius: f32,
+    #[serde(default = "zero3")]
+    pub position: [f32; 3],
+    /// Uniform scale multiplier on each asset's normalized placement size.
+    #[serde(default = "one_f")]
+    pub scale: f32,
+    /// Song section this field appears in (`None` = with the track).
     #[serde(default)]
     pub at_role: Option<crate::recipe::SectionRole>,
 }
@@ -236,6 +283,10 @@ pub enum AgentResponse {
     AssetPlaced {
         name: String,
     },
+    Scattered {
+        name: String,
+        count: usize,
+    },
     Modified {
         name: String,
     },
@@ -259,6 +310,7 @@ impl AgentResponse {
             Self::SessionBegun => "session begun".into(),
             Self::Spawned { name } => format!("spawned '{name}'"),
             Self::AssetPlaced { name } => format!("placed asset '{name}'"),
+            Self::Scattered { name, count } => format!("scattered {count} props as '{name}'"),
             Self::Modified { name } => format!("modified '{name}'"),
             Self::Deleted { name } => format!("deleted '{name}'"),
             Self::LightSet { name } => format!("light '{name}' set"),
@@ -300,6 +352,9 @@ fn default_intensity() -> f32 {
 }
 fn one_f() -> f32 {
     1.0
+}
+fn ten_f() -> f32 {
+    10.0
 }
 
 #[cfg(test)]
@@ -347,6 +402,7 @@ mod tests {
         let b = SceneBuild {
             commands: vec![AgentCommand::PlaceAsset(PlaceAssetCmd {
                 name: "gate".into(),
+                kind: "rock".into(),
                 asset: "rock_arch.glb".into(),
                 position: [0.0, 0.0, -6.0],
                 rotation_degrees: [0.0, 30.0, 0.0],
@@ -359,6 +415,7 @@ mod tests {
         let back: SceneBuild = serde_json::from_str(&json).unwrap();
         match &back.commands[0] {
             AgentCommand::PlaceAsset(c) => {
+                assert_eq!(c.kind, "rock");
                 assert_eq!(c.asset, "rock_arch.glb");
                 assert_eq!(c.scale, 1.4);
             }
@@ -367,5 +424,52 @@ mod tests {
         // Old sidecars (no description field) still deserialize.
         let legacy = json.replace(&serde_json::to_string(&b.description).unwrap(), "null");
         assert!(serde_json::from_str::<SceneBuild>(&legacy).is_ok());
+    }
+
+    /// Sidecars written before the kind vocabulary carry `asset` only (and no
+    /// `kind` key at all) — they must replay exactly as they were authored.
+    #[test]
+    fn legacy_place_asset_sidecar_without_kind_deserializes() {
+        let json = r#"{"commands":[
+            {"op":"place_asset","name":"gate","asset":"rock_arch.glb",
+             "position":[0,0,-6],"rotation_degrees":[0,30,0],"scale":1.4}
+        ]}"#;
+        let back: SceneBuild = serde_json::from_str(json).expect("legacy sidecar parses");
+        match &back.commands[0] {
+            AgentCommand::PlaceAsset(c) => {
+                assert_eq!(c.kind, "");
+                assert_eq!(c.asset, "rock_arch.glb");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn scatter_field_roundtrip() {
+        let b = SceneBuild {
+            commands: vec![AgentCommand::ScatterField(ScatterFieldCmd {
+                name: "pebble_field".into(),
+                kind: "rock".into(),
+                assets: vec!["stone_a.glb".into(), "stone_b.glb".into()],
+                count: 12,
+                radius: 8.0,
+                position: [2.0, -0.5, -10.0],
+                scale: 0.8,
+                at_role: Some(crate::recipe::SectionRole::Verse),
+            })],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&b).unwrap();
+        let back: SceneBuild = serde_json::from_str(&json).unwrap();
+        match &back.commands[0] {
+            AgentCommand::ScatterField(c) => {
+                assert_eq!(c.kind, "rock");
+                assert_eq!(c.assets.len(), 2);
+                assert_eq!(c.count, 12);
+                assert_eq!(c.radius, 8.0);
+                assert_eq!(c.at_role, Some(crate::recipe::SectionRole::Verse));
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 }

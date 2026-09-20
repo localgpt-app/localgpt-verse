@@ -60,8 +60,8 @@ use serde_json::{Value, json};
 // queries in every feature config).
 pub use crate::agent_types::{
     AgentAmbient, AgentCommand, AgentEntity, AgentLight, AgentResponse, EnvOverride,
-    EnvironmentCmd, ModifyEntityCmd, PlaceAssetCmd, PrimitiveShape, SceneBuild, SectionScoped,
-    SetLightCmd, SpawnPrimitiveCmd,
+    EnvironmentCmd, ModifyEntityCmd, PlaceAssetCmd, PrimitiveShape, ScatterFieldCmd, SceneBuild,
+    SectionScoped, SetLightCmd, SpawnPrimitiveCmd,
 };
 
 // The bridge's async channels are tokio mpsc (matches gen's pattern). The
@@ -127,10 +127,14 @@ pub fn create_channels() -> (Arc<AgentBridge>, AgentChannels) {
 /// The core tool definitions, as mistral.rs `Tool`s ready for `set_tools`.
 /// Each maps 1:1 to an [`AgentCommand`] variant executed by [`AgentExecutor`].
 ///
-/// With a manifest, `place_asset`'s `asset` parameter is an enum of the actual
-/// bundled files — the model literally cannot name an asset that isn't there
-/// (the asset vocabulary idea.md Stage 3 calls for). Without one, the tool is
-/// omitted and the agent builds from primitives only.
+/// With a manifest, `place_asset` and `scatter_field` join the set. Both speak
+/// the **two-level vocabulary**: their `kind` parameter is an enum of the
+/// manifest's semantic kinds (`rock`, `tree`, `lamp`, …) — a small, stable,
+/// clean-token list that a local GGUF can hold reliably — while the host
+/// resolves each call to a concrete variant, preferring the track's mood and
+/// rotating so repeats differ. Diversity scales with the pool, not the enum
+/// (which a long file-name list would only degrade). Without a manifest both
+/// tools are omitted and the agent builds from primitives only.
 pub fn tool_schemas(manifest: Option<&AssetManifest>) -> Vec<mistralrs::Tool> {
     use mistralrs::{Function, Tool, ToolType};
     /// helper: build a Function from name/description/parameters JSON.
@@ -219,40 +223,148 @@ pub fn tool_schemas(manifest: Option<&AssetManifest>) -> Vec<mistralrs::Tool> {
         ),
     ];
     if let Some(manifest) = manifest {
-        let files: Vec<&str> = manifest.assets.iter().map(|a| a.file.as_str()).collect();
-        // The description carries the human-readable names alongside the enum,
-        // so the model can match intent ("a rock arch") to a file.
-        let listed = manifest
-            .assets
+        // The enum is the *kind* list; the description carries example names
+        // per kind so the model knows what each kind looks like without a
+        // per-file enum (long file-name enums are exactly what a small local
+        // model handles worst).
+        let kinds = manifest.kinds();
+        let listed = kinds
             .iter()
-            .map(|a| a.name.as_str())
+            .map(|k| {
+                let examples: Vec<&str> = manifest
+                    .assets
+                    .iter()
+                    .filter(|a| a.kind == *k)
+                    .take(3)
+                    .map(|a| a.name.as_str())
+                    .collect();
+                format!("{k} ({})", examples.join(", "))
+            })
             .collect::<Vec<_>>()
-            .join(", ");
+            .join("; ");
         tools.insert(
             1,
             f(
                 "place_asset",
                 &format!(
-                    "Place one of the app's curated CC0 3D assets — real scanned models: {listed}. \
-                     Prefer these for natural landmarks (rocks, crystals, ruins, plants); use \
-                     spawn_primitive only for structures the list lacks."
+                    "Place one of the app's curated CC0 3D models — real scanned props, grouped \
+                     by kind: {listed}. You name the kind; the app picks a concrete model that \
+                     fits this world and varies it on repeats. Prefer these over primitives."
                 ),
                 json!({
                     "type": "object",
                     "properties": {
                         "name": {"type": "string", "description": "Unique name for this placement (e.g. 'gate_1')"},
-                        "asset": {"type": "string", "enum": files, "description": "Asset file to place"},
+                        "kind": {"type": "string", "enum": kinds, "description": "What to place (the app picks the model)"},
                         "position": {"type": "array", "items": {"type":"number"}, "default": [0,0,0]},
                         "rotation_degrees": {"type": "array", "items": {"type":"number"}, "default": [0,0,0]},
                         "scale": {"type": "number", "default": 1.0, "description": "Uniform scale multiplier"},
                         "at_role": {"type": "string", "enum": ["intro","verse","chorus","drop","bridge","outro"], "description": "Song section this asset appears in (e.g. a gateway for the bridge, monuments on the chorus)"}
                     },
-                    "required": ["name", "asset"]
+                    "required": ["name", "kind"]
+                }),
+            ),
+        );
+        tools.insert(
+            2,
+            f(
+                "scatter_field",
+                &format!(
+                    "Scatter many instances of one kind across a disk in a single call — a field \
+                     of rocks, a drift of shells, rows of barrels. Kinds: {listed}. Use this \
+                     instead of repeated place_asset whenever you want more than ~4 of something; \
+                     it is the cheapest way to make a world feel dense."
+                ),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Unique prefix; instances are named name_1 … name_N"},
+                        "kind": {"type": "string", "enum": kinds, "description": "What to scatter (variants mix automatically)"},
+                        "count": {"type": "integer", "minimum": 1, "maximum": 48, "default": 12},
+                        "radius": {"type": "number", "minimum": 0.5, "maximum": 120, "default": 10, "description": "Disk radius in metres around position"},
+                        "position": {"type": "array", "items": {"type":"number"}, "default": [0,0,0]},
+                        "scale": {"type": "number", "default": 1.0, "description": "Uniform scale multiplier"},
+                        "at_role": {"type": "string", "enum": ["intro","verse","chorus","drop","bridge","outro"], "description": "Song section this field appears in"}
+                    },
+                    "required": ["name", "kind"]
                 }),
             ),
         );
     }
     tools
+}
+
+/// Resolve a parsed command's kind-level asset references against the
+/// manifest — the host half of the two-level vocabulary, run *in the session*
+/// so the recorded [`SceneBuild`] carries the concrete files and replays
+/// exactly. `used` is the session's rotation state (shared with
+/// [`crate::world_assets::resolve_kind`]); `mood` is the track's, so variants
+/// fit the world being authored. `Err(message)` becomes the tool-error reply
+/// and the command is *not* recorded (a failed call must not ghost into the
+/// replayed build).
+fn resolve_agent_assets(
+    cmd: AgentCommand,
+    manifest: &AssetManifest,
+    mood: usize,
+    used: &mut Vec<String>,
+) -> Result<AgentCommand, String> {
+    match cmd {
+        AgentCommand::PlaceAsset(mut c) => {
+            // A concrete file (legacy behaviour, or a model that names one
+            // anyway): keep it, backfilling the kind for the record.
+            if !c.asset.is_empty() {
+                if let Some(e) = manifest.assets.iter().find(|a| a.file == c.asset) {
+                    if c.kind.is_empty() {
+                        c.kind = e.kind.clone();
+                    }
+                    return Ok(AgentCommand::PlaceAsset(c));
+                }
+                if c.kind.is_empty() {
+                    return Err(format!(
+                        "unknown asset '{}' (name a 'kind' from place_asset's enum)",
+                        c.asset
+                    ));
+                }
+                c.asset = String::new(); // unknown file, known kind → resolve
+            }
+            if c.kind.is_empty() {
+                return Err("place_asset needs a 'kind' from its enum".into());
+            }
+            match crate::world_assets::resolve_kind(manifest, &c.kind, Some(mood), used) {
+                Some(e) => {
+                    c.asset = e.file.clone();
+                    Ok(AgentCommand::PlaceAsset(c))
+                }
+                None => Err(format!(
+                    "no '{kind}' in the asset pack (see place_asset's enum)",
+                    kind = c.kind
+                )),
+            }
+        }
+        AgentCommand::ScatterField(mut c) => {
+            if c.kind.is_empty() {
+                return Err("scatter_field needs a 'kind' from its enum".into());
+            }
+            // Up to four mood-preferred variants, cycled across the instances
+            // — a field of one model reads as clones; four read as a landscape.
+            let mut variants: Vec<String> = Vec::new();
+            for _ in 0..4 {
+                match crate::world_assets::resolve_kind(manifest, &c.kind, Some(mood), used) {
+                    Some(e) if !variants.contains(&e.file) => variants.push(e.file.clone()),
+                    _ => break,
+                }
+            }
+            if variants.is_empty() {
+                return Err(format!(
+                    "no '{kind}' in the asset pack (see scatter_field's enum)",
+                    kind = c.kind
+                ));
+            }
+            c.assets = variants;
+            Ok(AgentCommand::ScatterField(c))
+        }
+        other => Ok(other),
+    }
 }
 
 /// Map a tool name + arguments JSON into an [`AgentCommand`]. Returns `None`
@@ -283,10 +395,25 @@ fn parse_tool_call(name: &str, args: &str) -> Option<AgentCommand> {
         })),
         "place_asset" => Some(AgentCommand::PlaceAsset(PlaceAssetCmd {
             name: args["name"].as_str()?.into(),
-            asset: args["asset"].as_str()?.into(),
+            // Two-level vocabulary: the model names a kind; the session loop
+            // resolves it to a concrete file before recording/sending. A bare
+            // `asset` (file) still parses for legacy/robustness and is
+            // resolved the same way.
+            kind: args["kind"].as_str().unwrap_or_default().to_lowercase(),
+            asset: args["asset"].as_str().unwrap_or_default().to_string(),
             position: parse_arr3(&args["position"]),
             rotation_degrees: parse_arr3(&args["rotation_degrees"]),
-            scale: args["scale"].as_f64().unwrap_or(1.0) as f32,
+            scale: args["scale"].as_f64().unwrap_or(1.0).clamp(0.05, 20.0) as f32,
+            at_role: parse_role(args.get("at_role")),
+        })),
+        "scatter_field" => Some(AgentCommand::ScatterField(ScatterFieldCmd {
+            name: args["name"].as_str()?.into(),
+            kind: args["kind"].as_str().unwrap_or_default().to_lowercase(),
+            assets: Vec::new(), // resolved (and recorded) by the session loop
+            count: args["count"].as_i64().unwrap_or(12).clamp(1, 48) as u32,
+            radius: args["radius"].as_f64().unwrap_or(10.0).clamp(0.5, 120.0) as f32,
+            position: parse_arr3(&args["position"]),
+            scale: args["scale"].as_f64().unwrap_or(1.0).clamp(0.05, 20.0) as f32,
             at_role: parse_role(args.get("at_role")),
         })),
         "modify_entity" => Some(AgentCommand::ModifyEntity(ModifyEntityCmd {
@@ -425,6 +552,10 @@ pub struct AgentExecutor {
     /// The content-hash id of the track whose session/replay is executing.
     /// Every spawned entity is stamped with it (track scoping — module docs).
     session_track: String,
+    /// Kind-resolution rotation state for the executor's *fallback* path (a
+    /// replayed build whose recorded variant has left the manifest). Cleared
+    /// per session/replay, like the rest of the scope.
+    kind_used: Vec<String>,
 }
 
 impl AgentExecutor {
@@ -439,6 +570,7 @@ impl AgentExecutor {
             ambient: None,
             env: None,
             session_track: String::new(),
+            kind_used: Vec::new(),
         }
     }
 }
@@ -488,6 +620,7 @@ impl AgentExecutor {
         match cmd {
             AgentCommand::BeginSession { track: t } => {
                 self.session_track = t;
+                self.kind_used.clear();
                 AgentResponse::SessionBegun
             }
             AgentCommand::SpawnPrimitive(c) => {
@@ -551,9 +684,28 @@ impl AgentExecutor {
                 let Some(manifest) = &deps.assets.manifest else {
                     return AgentResponse::Error("no asset pack bundled".into());
                 };
-                let Some(entry) = manifest.assets.iter().find(|a| a.file == c.asset) else {
+                // The recorded file decides; the kind is the fallback when a
+                // replayed build's variant has left the manifest (pool grown
+                // or pruned since it was cached).
+                let entry = manifest
+                    .assets
+                    .iter()
+                    .find(|a| a.file == c.asset)
+                    .or_else(|| {
+                        (!c.kind.is_empty())
+                            .then(|| {
+                                crate::world_assets::resolve_kind(
+                                    manifest,
+                                    &c.kind,
+                                    None,
+                                    &mut self.kind_used,
+                                )
+                            })
+                            .flatten()
+                    });
+                let Some(entry) = entry else {
                     return AgentResponse::Error(format!(
-                        "unknown asset '{}' (see place_asset's enum)",
+                        "unknown asset '{}' (see place_asset's kinds)",
                         c.asset
                     ));
                 };
@@ -590,6 +742,98 @@ impl AgentExecutor {
                 }
                 self.registry.map.insert(c.name.clone(), entity);
                 AgentResponse::AssetPlaced { name: c.name }
+            }
+            AgentCommand::ScatterField(c) => {
+                if self.registry.contains(&c.name) {
+                    return AgentResponse::Error(format!("'{}' already exists", c.name));
+                }
+                let Some(manifest) = &deps.assets.manifest else {
+                    return AgentResponse::Error("no asset pack bundled".into());
+                };
+                // Recorded variants decide; resolve fresh only when absent
+                // (never happens live — the session resolves before recording).
+                let mut variants: Vec<&crate::world_assets::AssetEntry> = c
+                    .assets
+                    .iter()
+                    .filter_map(|f| manifest.assets.iter().find(|a| &a.file == f))
+                    .collect();
+                if variants.is_empty() && !c.kind.is_empty() {
+                    let mut used = Vec::new();
+                    for _ in 0..4 {
+                        match crate::world_assets::resolve_kind(manifest, &c.kind, None, &mut used)
+                        {
+                            Some(e) if !variants.iter().any(|v| v.file == e.file) => {
+                                variants.push(e)
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+                if variants.is_empty() {
+                    return AgentResponse::Error(format!(
+                        "no '{}' assets in the pack (see scatter_field's kinds)",
+                        c.kind
+                    ));
+                }
+                // Deterministic field: seed from (track, name) — a cached
+                // build replays to the identical scatter (ARCHITECTURE R6).
+                let base = Vec3::from(c.position);
+                let seed =
+                    crate::world_assets::fold_seed(&format!("{}|{}", self.session_track, c.name));
+                let offsets =
+                    crate::world_assets::scatter_offsets(seed, c.count as usize, c.radius);
+                let mut rng = seed ^ 0xA5A5_5EED_u64;
+                let count = offsets.len();
+                for (i, off) in offsets.into_iter().enumerate() {
+                    let entry = variants[i % variants.len()];
+                    let handle: Handle<_> = deps.asset_server.load(
+                        bevy::gltf::GltfAssetLabel::Scene(0)
+                            .from_asset(format!("models/{}", entry.file)),
+                    );
+                    let instance = format!("{}_{}", c.name, i + 1);
+                    let entity = commands
+                        .spawn((
+                            AgentEntity {
+                                name: instance.clone(),
+                                track: track.clone(),
+                            },
+                            Name::new(instance.clone()),
+                            WorldAssetRoot(handle),
+                            Transform::from_translation(base + off)
+                                .with_rotation(Quat::from_rotation_y(
+                                    crate::world_assets::rand01(&mut rng) * std::f32::consts::TAU,
+                                ))
+                                .with_scale(Vec3::splat(
+                                    entry.placement_scale()
+                                        * c.scale.max(0.05)
+                                        * (0.7 + crate::world_assets::rand01(&mut rng) * 0.7),
+                                )),
+                            // Revealed by `sync_agent_scene_scope` when (and
+                            // only when) this track is the one playing.
+                            Visibility::Hidden,
+                        ))
+                        .id();
+                    // Distance culling by tier (ARCHITECTURE R7): a dense
+                    // field of heroes still needs its skyline, but scatter-
+                    // tier fields drop out inside the fog band like the
+                    // world's own ground cover.
+                    if let Some(range) = entry.tier.visibility_range() {
+                        commands.entity(entity).insert(range);
+                    }
+                    if let Some(role) = c.at_role {
+                        commands
+                            .entity(entity)
+                            .insert(crate::agent_types::SectionScoped {
+                                role,
+                                track: track.clone(),
+                            });
+                    }
+                    self.registry.map.insert(instance, entity);
+                }
+                AgentResponse::Scattered {
+                    name: c.name,
+                    count,
+                }
             }
             AgentCommand::ModifyEntity(c) => {
                 let Some(&entity) = self.registry.map.get(&c.name) else {
@@ -813,6 +1057,7 @@ impl AgentExecutor {
         }
         self.ambient = None;
         self.env = None;
+        self.kind_used.clear();
     }
 
     /// Replay a cached [`SceneBuild`] — iterate its commands through `execute`
@@ -829,6 +1074,7 @@ impl AgentExecutor {
         deps: ExecDeps<'_>,
     ) -> usize {
         self.session_track = track.to_string();
+        self.kind_used.clear();
         let mut n = 0;
         for cmd in &build.commands {
             // Report-only or session-scoped commands have no effect on replay.
@@ -1108,6 +1354,10 @@ pub fn run_session(
     rt.block_on(async move {
         let tools = tool_schemas(manifest);
         let mut build = SceneBuild::default();
+        // Session-wide kind-rotation state: every place_asset/scatter_field
+        // consumes from it, so repeats within a world differ (the host half
+        // of the two-level vocabulary).
+        let mut asset_used: Vec<String> = Vec::new();
 
         // Seed the conversation with the world-design brief, scoped to this
         // track so the executor stamps its entities correctly. Not recorded —
@@ -1176,6 +1426,27 @@ pub fn run_session(
                 let args = &call.function.arguments;
                 match parse_tool_call(name, args) {
                     Some(cmd) => {
+                        // Resolve kind-level references to concrete manifest
+                        // files *before* recording, so the cached SceneBuild
+                        // replays exactly (and the model's error reply never
+                        // ghosts into the build).
+                        let cmd = if let Some(manifest) = manifest {
+                            match resolve_agent_assets(
+                                cmd,
+                                manifest,
+                                analysis.mood,
+                                &mut asset_used,
+                            ) {
+                                Ok(cmd) => cmd,
+                                Err(e) => {
+                                    messages = messages
+                                        .add_tool_message(format!("error: {e}"), call.id.clone());
+                                    continue;
+                                }
+                            }
+                        } else {
+                            cmd
+                        };
                         build.commands.push(cmd.clone());
                         let resp = bridge.send(cmd).await;
                         messages = messages.add_tool_message(resp.to_message(), call.id.clone());
@@ -1225,9 +1496,11 @@ fn build_system_prompt(analysis: &TrackAnalysis, manifest: Option<&AssetManifest
         "unknown".into()
     };
     let assets = if manifest.is_some() {
-        "place_asset places curated CC0 models (rocks, crystals, ruins, plants) — prefer them \
-         for natural landmarks; spawn_primitive composes raw shapes for anything the asset \
-         list lacks. "
+        "place_asset places curated CC0 models by *kind* (rock, tree, lamp, statue, …) — the \
+         app picks the concrete model to fit this world and varies it on repeats, so prefer \
+         kinds over hand-built primitives. scatter_field is the richness multiplier: one call \
+         scatters a whole field of one kind — use it for ground cover and anything you want \
+         more than a few of instead of repeating place_asset. "
     } else {
         ""
     };
@@ -1236,9 +1509,10 @@ fn build_system_prompt(analysis: &TrackAnalysis, manifest: Option<&AssetManifest
 matches this song by calling the tools. {assets}\
 Call scene_info to review your work and iterate.\n\n\
 Song context: mood = {mood}, tempo = {bpm} BPM, {n} sections.\n\
-Keep it tasteful and performant: 8-16 structures is plenty. Place a ground plane only if \
-the world feels empty, a few hero structures, and accent lighting that suits the mood. \
-When you are done, reply with a short description of the world instead of calling more tools.",
+Keep it tasteful and performant: 8-16 structures plus one or two scatter fields is plenty. \
+Place a ground plane only if the world feels empty, a few hero structures, and accent \
+lighting that suits the mood. When you are done, reply with a short description of the \
+world instead of calling more tools.",
         n = analysis.sections.len().max(1)
     )
 }
@@ -1263,18 +1537,100 @@ mod tests {
         let manifest: AssetManifest = serde_json::from_str(
             r#"{"version":1,"assets":[
                 {"id":"u1","name":"Rock Arch","file":"rock_arch.glb","tier":"hero",
-                 "mood":0,"license":"CC0","author":"a","source":"s"}
+                 "kind":"rock","mood":0,"license":"CC0","author":"a","source":"s"},
+                {"id":"u2","name":"Street Lamp","file":"street_lamp.glb","tier":"medium",
+                 "kind":"lamp","mood":1,"license":"CC0","author":"a","source":"s"}
             ]}"#,
         )
         .expect("parses");
         let schemas = tool_schemas(Some(&manifest));
-        assert_eq!(schemas.len(), 7, "place_asset joins with a manifest");
+        assert_eq!(
+            schemas.len(),
+            8,
+            "place_asset + scatter_field join with a manifest"
+        );
         let place = schemas.iter().find(|t| t.function.name == "place_asset");
         assert!(place.is_some(), "place_asset present");
         let params = place.unwrap().function.parameters.clone().unwrap();
         let json = serde_json::to_value(&params).unwrap();
-        let allowed = &json["properties"]["asset"]["enum"];
-        assert_eq!(allowed[0].as_str(), Some("rock_arch.glb"));
+        // The enum is the *kind* vocabulary (small, stable), not the file list.
+        let allowed = &json["properties"]["kind"]["enum"];
+        assert_eq!(allowed[0].as_str(), Some("rock"));
+        assert_eq!(allowed[1].as_str(), Some("lamp"));
+        // The description carries example names so intent maps onto kinds.
+        let desc = place.unwrap().function.description.clone().unwrap();
+        assert!(desc.contains("Rock Arch") && desc.contains("Street Lamp"));
+        // scatter_field shares the kind enum.
+        let scatter = schemas
+            .iter()
+            .find(|t| t.function.name == "scatter_field")
+            .expect("scatter_field present");
+        let sparams = scatter.function.parameters.clone().unwrap();
+        let sjson = serde_json::to_value(&sparams).unwrap();
+        assert_eq!(
+            sjson["properties"]["kind"]["enum"][0].as_str(),
+            Some("rock")
+        );
+    }
+
+    #[test]
+    fn session_resolution_rotates_and_records() {
+        let manifest: AssetManifest = serde_json::from_str(
+            r#"{"version":2,"assets":[
+                {"id":"r1","name":"Boulder A","file":"boulder_a.glb","tier":"hero",
+                 "kind":"rock","mood":0,"license":"CC0","author":"a","source":"s"},
+                {"id":"r2","name":"Boulder B","file":"boulder_b.glb","tier":"hero",
+                 "kind":"rock","mood":0,"license":"CC0","author":"a","source":"s"},
+                {"id":"t1","name":"Pine","file":"pine.glb","tier":"hero",
+                 "kind":"tree","mood":2,"license":"CC0","author":"a","source":"s"}
+            ]}"#,
+        )
+        .expect("parses");
+        let mut used = Vec::new();
+        // Two rock asks rotate; the tree resolves in its own mood.
+        let cmd = parse_tool_call(
+            "place_asset",
+            r#"{"name":"r1","kind":"rock","position":[1,0,-4]}"#,
+        )
+        .unwrap();
+        let resolved = resolve_agent_assets(cmd, &manifest, 0, &mut used)
+            .expect("resolves")
+            .clone();
+        match resolved {
+            AgentCommand::PlaceAsset(c) => {
+                assert_eq!(c.asset, "boulder_a.glb");
+                assert_eq!(c.kind, "rock");
+            }
+            _ => panic!("wrong variant"),
+        }
+        let cmd = parse_tool_call("place_asset", r#"{"name":"r2","kind":"Rock"}"#).unwrap();
+        let resolved = resolve_agent_assets(cmd, &manifest, 0, &mut used)
+            .expect("resolves")
+            .clone();
+        match resolved {
+            AgentCommand::PlaceAsset(c) => assert_eq!(c.asset, "boulder_b.glb"),
+            _ => panic!("wrong variant"),
+        }
+        // A kind absent from the pack is a tool error, not a silent guess.
+        let cmd = parse_tool_call("place_asset", r#"{"name":"x","kind":"crystal"}"#).unwrap();
+        assert!(resolve_agent_assets(cmd, &manifest, 0, &mut used).is_err());
+        // scatter_field resolves up to four variants of the kind.
+        let cmd = parse_tool_call(
+            "scatter_field",
+            r#"{"name":"field","kind":"rock","count":9,"radius":6}"#,
+        )
+        .unwrap();
+        let resolved = resolve_agent_assets(cmd, &manifest, 2, &mut used)
+            .expect("resolves")
+            .clone();
+        match resolved {
+            AgentCommand::ScatterField(c) => {
+                assert!(!c.assets.is_empty());
+                assert!(c.assets.iter().all(|f| f.ends_with(".glb")));
+                assert_eq!(c.count, 9);
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]
@@ -1293,13 +1649,44 @@ mod tests {
 
     #[test]
     fn parse_tool_call_round_trips_place_asset() {
-        let args = r#"{"name":"gate","asset":"rock_arch.glb","position":[0,0,-6],"scale":1.5}"#;
+        // Kind form (the schema the model sees).
+        let args = r#"{"name":"gate","kind":"rock","position":[0,0,-6],"scale":1.5}"#;
         let cmd = parse_tool_call("place_asset", args).expect("parses");
         match cmd {
             AgentCommand::PlaceAsset(p) => {
-                assert_eq!(p.asset, "rock_arch.glb");
+                assert_eq!(p.kind, "rock");
+                assert_eq!(p.asset, "");
                 assert_eq!(p.scale, 1.5);
             }
+            _ => panic!("wrong variant"),
+        }
+        // Legacy/robustness: a model naming a concrete file still parses and
+        // is resolved (or backfilled) by the session loop.
+        let args = r#"{"name":"gate","asset":"rock_arch.glb"}"#;
+        let cmd = parse_tool_call("place_asset", args).expect("parses");
+        match cmd {
+            AgentCommand::PlaceAsset(p) => assert_eq!(p.asset, "rock_arch.glb"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_round_trips_scatter_field() {
+        let args = r#"{"name":"pebbles","kind":"shell","count":200,"radius":900,"scale":3}"#;
+        let cmd = parse_tool_call("scatter_field", args).expect("parses");
+        match cmd {
+            AgentCommand::ScatterField(c) => {
+                assert_eq!(c.kind, "shell");
+                assert_eq!(c.count, 48, "count clamps to the budget cap");
+                assert_eq!(c.radius, 120.0, "radius clamps");
+                assert!(c.assets.is_empty(), "resolved by the session loop");
+            }
+            _ => panic!("wrong variant"),
+        }
+        // Missing kind → unresolvable (the session reports the tool error).
+        let cmd = parse_tool_call("scatter_field", r#"{"name":"x","count":4}"#).unwrap();
+        match cmd {
+            AgentCommand::ScatterField(c) => assert_eq!(c.kind, ""),
             _ => panic!("wrong variant"),
         }
     }
@@ -1318,6 +1705,14 @@ mod tests {
         assert_eq!(
             AgentResponse::AssetPlaced { name: "y".into() }.to_message(),
             "placed asset 'y'"
+        );
+        assert_eq!(
+            AgentResponse::Scattered {
+                name: "pebbles".into(),
+                count: 12
+            }
+            .to_message(),
+            "scattered 12 props as 'pebbles'"
         );
         assert!(
             AgentResponse::Error("bad".into())
