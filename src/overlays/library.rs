@@ -3,7 +3,7 @@
 //! A left sidebar (wordmark, search field, Import folder, Settings, and the
 //! worlds as browsable "playlists") beside a track table (# / TITLE / ALBUM /
 //! WORLD / LENGTH). Rows play on click; Play / Shuffle start the shown set.
-//! Adapts the spec's named playlists to Reverie's own axis — the worlds each
+//! Adapts the spec's named playlists to LocalGPT Verse's own axis — the worlds each
 //! song is imagined into — since that is the grouping the app actually has.
 
 use bevy::prelude::*;
@@ -100,7 +100,7 @@ fn sidebar(
         BorderColor::all(theme::hairline()),
     ))
     .with_children(|side| {
-        label_text(side, fonts, "REVERIE", 20.0, TEXT, true);
+        label_text(side, fonts, "LOCALGPT VERSE", 20.0, TEXT, true);
         spacer(side, 14.0);
 
         // Search field (visual affordance; browse by world below to filter).

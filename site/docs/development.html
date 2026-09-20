@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Development — Reverie docs</title>
-<meta name="description" content="Build, test, and package Reverie: repo layout, feature flags, smoke and stress tests, the bundle script, and the full license breakdown.">
+<title>Development — LocalGPT Verse docs</title>
+<meta name="description" content="Build, test, and package LocalGPT Verse: repo layout, feature flags, smoke and stress tests, the bundle script, and the full license breakdown.">
 <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
 <link rel="stylesheet" href="../assets/css/style.css">
 </head>
@@ -14,14 +14,14 @@
   <div class="wrap nav-inner">
     <a class="brand" href="../index.html">
       <img src="../assets/favicon.svg" alt="" width="26" height="26">
-      Reverie
+      LocalGPT Verse
     </a>
     <button class="nav-toggle" aria-label="Menu" aria-expanded="false">☰</button>
     <nav class="nav-links">
       <a href="../index.html">Overview</a>
       <a href="index.html" aria-current="page">Docs</a>
       <a href="worlds.html">Worlds</a>
-      <a href="https://github.com/localgpt-app/reverie">GitHub</a>
+      <a href="https://github.com/localgpt-app/localgpt-verse">GitHub</a>
       <a class="btn btn-primary nav-cta" href="index.html">Get started</a>
     </nav>
   </div>
@@ -29,7 +29,7 @@
 
 <div class="wrap docs-hero">
   <h1>Development</h1>
-  <p class="lede">Build, test, and package Reverie — plus the map of what's
+  <p class="lede">Build, test, and package LocalGPT Verse — plus the map of what's
   inside.</p>
 </div>
 
@@ -62,7 +62,7 @@
   <main class="prose">
 
     <h2 id="layout">Repository layout</h2>
-    <pre><code>reverie/
+    <pre><code>localgpt-verse/
 ├── src/
 │   ├── main.rs           app wiring, schedules, states
 │   ├── theme.rs          design tokens + the world-mood registry
@@ -100,25 +100,26 @@
     <h2 id="smoke">Smoke test</h2>
     <p>Boots through every screen, then exits — the fastest way to catch a
     broken overlay:</p>
-    <pre><code>REVERIE_SMOKE=1 cargo run                    # walk every screen, then quit
-REVERIE_SMOKE=1 REVERIE_SHOT=/tmp cargo run  # + save reverie-hud.png / reverie-overlays.png</code></pre>
+    <pre><code>VERSE_SMOKE=1 cargo run                    # walk every screen, then quit
+VERSE_SMOKE=1 VERSE_SHOT=/tmp cargo run  # + save verse-hud.png / verse-overlays.png</code></pre>
     <div class="note">Screenshot readback can intermittently return black
     frames on some machines (that's why Photo mode retries). A <i>consistent</i>
     black frame is a scene bug, not the flake — check the logs.</div>
 
     <h2 id="stress">Perf stress test</h2>
-    <pre><code>REVERIE_STRESS=5000 cargo run --release   # 5000 extra props, fps log, exit after 30s
-REVERIE_STRESS=0 cargo run --release      # control run: report only</code></pre>
+    <pre><code>VERSE_STRESS=5000 cargo run --release   # 5000 extra props, fps log, exit after 30s
+VERSE_STRESS=0 cargo run --release      # control run: report only</code></pre>
     <p>Runs uncapped so the numbers show true frame cost. On the dev machine
     (2026-07): baseline world ~60 fps, ~1k props ≈ 14 fps, 5k ≈ 9 fps — CPU-side
     entity overhead dominates, so ~70–90 props is the comfortable ceiling until
     real instancing lands. Treat dense-pack budgets as measured, not promised.</p>
 
     <h2 id="bundle">Packaging</h2>
-    <pre><code>scripts/bundle.sh   # assembles dist/: release binary + fonts + models from reverie-assets</code></pre>
-    <p>The 52-model CC0 pack lives in the separate <code>reverie-assets</code>
+    <pre><code>scripts/bundle.sh   # assembles dist/: release binary + fonts + models from verse-assets</code></pre>
+    <p>The 171-model CC0 pack lives in the separate <code>verse-assets</code>
     repository; <code>fetch_polyhaven.py</code> downloads it and writes the
-    manifest, <code>normalize.py</code> packs each model to a single
+    manifest (with a semantic <code>kind</code> per asset — 19 kinds),
+    <code>normalize.py</code> packs each model to a single
     uncompressed <code>.glb</code> (bevy_gltf supports neither quantized nor
     meshopt-compressed geometry) and syncs the manifest-referenced set into
     <code>assets/models/</code>.</p>
@@ -142,17 +143,17 @@ REVERIE_STRESS=0 cargo run --release      # control run: report only</code></pre
                                                └───────────────────────────┘</code></pre>
     <p>The full review — load-bearing decisions, findings, and the LLM tier
     details — lives in
-    <a href="https://github.com/localgpt-app/reverie/blob/main/ARCHITECTURE.md">ARCHITECTURE.md</a>;
+    <a href="https://github.com/localgpt-app/localgpt-verse/blob/main/ARCHITECTURE.md">ARCHITECTURE.md</a>;
     milestone status in
-    <a href="https://github.com/localgpt-app/reverie/blob/main/PLAN.md">PLAN.md</a>.</p>
+    <a href="https://github.com/localgpt-app/localgpt-verse/blob/main/PLAN.md">PLAN.md</a>.</p>
 
     <h2 id="licenses">Licenses</h2>
     <table>
       <thead><tr><th>Part</th><th>License</th></tr></thead>
       <tbody>
-        <tr><td>Reverie code</td><td><a href="https://github.com/localgpt-app/reverie/blob/main/LICENSE">Apache License 2.0</a></td></tr>
+        <tr><td>LocalGPT Verse code</td><td><a href="https://github.com/localgpt-app/localgpt-verse/blob/main/LICENSE">Apache License 2.0</a></td></tr>
         <tr><td>Marcellus &amp; Hanken Grotesk fonts</td><td>SIL Open Font License 1.1</td></tr>
-        <tr><td>3D model pack &amp; starter music (<code>reverie-assets</code>)</td><td>CC0 1.0 (public domain)</td></tr>
+        <tr><td>3D model pack &amp; starter music (<code>verse-assets</code>)</td><td>CC0 1.0 (public domain)</td></tr>
         <tr><td>Bonsai-8B LLM weights</td><td>Apache-2.0</td></tr>
         <tr><td>CLAP audio model weights</td><td>CC-BY-NC-4.0 — non-commercial only</td></tr>
       </tbody>
@@ -173,7 +174,7 @@ REVERIE_STRESS=0 cargo run --release      # control run: report only</code></pre
   <div class="wrap">
     <div class="footer-grid">
       <div>
-        <h4>Reverie</h4>
+        <h4>LocalGPT Verse</h4>
         <p style="max-width: 26rem;">A desktop app that imagines a 3D world for
         every song — built with <a href="https://bevyengine.org/">Bevy</a>, driven
         by on-device music analysis, and free inside and out.</p>
@@ -191,8 +192,8 @@ REVERIE_STRESS=0 cargo run --release      # control run: report only</code></pre
       <div>
         <h4>Project</h4>
         <ul>
-          <li><a href="https://github.com/localgpt-app/reverie">GitHub</a></li>
-          <li><a href="https://github.com/localgpt-app/reverie/blob/main/LICENSE">Apache-2.0 license</a></li>
+          <li><a href="https://github.com/localgpt-app/localgpt-verse">GitHub</a></li>
+          <li><a href="https://github.com/localgpt-app/localgpt-verse/blob/main/LICENSE">Apache-2.0 license</a></li>
           <li><a href="development.html#licenses">Fonts &amp; asset licenses</a></li>
         </ul>
       </div>

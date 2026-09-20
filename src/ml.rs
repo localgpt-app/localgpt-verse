@@ -572,11 +572,11 @@ mod tests {
     }
 
     /// Manual real-track check:
-    /// `REVERIE_TEST_TRACK=<file> cargo test --features ml real_track -- --ignored --nocapture`
+    /// `VERSE_TEST_TRACK=<file> cargo test --features ml real_track -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn real_track_embedding_and_mood() {
-        let Ok(path) = std::env::var("REVERIE_TEST_TRACK") else {
+        let Ok(path) = std::env::var("VERSE_TEST_TRACK") else {
             return;
         };
         let mut model = ClapModel::try_load().expect("model file (scripts/fetch-clap.sh)");

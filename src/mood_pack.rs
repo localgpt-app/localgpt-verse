@@ -54,7 +54,7 @@ pub fn mount(world: &mut World, mood: WorldMood) -> bool {
     true
 }
 
-/// A world that exists to exercise mounting, enabled by `REVERIE_PACK=1`.
+/// A world that exists to exercise mounting, enabled by `VERSE_PACK=1`.
 ///
 /// Deliberately **not** a fifth shipped world. Two things stop it being one, and
 /// both are the real ceiling on growing past four:
@@ -83,9 +83,9 @@ pub fn demo_pack() -> WorldMood {
     }
 }
 
-/// Mount [`demo_pack`] when `REVERIE_PACK` is set. No-op otherwise.
+/// Mount [`demo_pack`] when `VERSE_PACK` is set. No-op otherwise.
 pub fn mount_demo_pack_if_requested(world: &mut World) {
-    if std::env::var("REVERIE_PACK").is_err() {
+    if std::env::var("VERSE_PACK").is_err() {
         return;
     }
     let pack = demo_pack();

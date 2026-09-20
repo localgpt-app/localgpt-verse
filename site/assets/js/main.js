@@ -1,4 +1,4 @@
-/* Reverie website — shared interactions. No dependencies. */
+/* LocalGPT Verse website — shared interactions. No dependencies. */
 (function () {
   "use strict";
 

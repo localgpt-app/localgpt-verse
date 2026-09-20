@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Getting started — Reverie docs</title>
-<meta name="description" content="Install and run Reverie, import your music folder, and enable the optional ML and LLM imagination tiers.">
+<title>Getting started — LocalGPT Verse docs</title>
+<meta name="description" content="Install and run LocalGPT Verse, import your music folder, and enable the optional ML and LLM imagination tiers.">
 <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
 <link rel="stylesheet" href="../assets/css/style.css">
 </head>
@@ -14,14 +14,14 @@
   <div class="wrap nav-inner">
     <a class="brand" href="../index.html">
       <img src="../assets/favicon.svg" alt="" width="26" height="26">
-      Reverie
+      LocalGPT Verse
     </a>
     <button class="nav-toggle" aria-label="Menu" aria-expanded="false">☰</button>
     <nav class="nav-links">
       <a href="../index.html">Overview</a>
       <a href="index.html" aria-current="page">Docs</a>
       <a href="worlds.html">Worlds</a>
-      <a href="https://github.com/localgpt-app/reverie">GitHub</a>
+      <a href="https://github.com/localgpt-app/localgpt-verse">GitHub</a>
       <a class="btn btn-primary nav-cta" href="index.html">Get started</a>
     </nav>
   </div>
@@ -47,7 +47,7 @@
     <div class="group">
       <p class="group-label">On this page</p>
       <ul>
-        <li><a href="#run">Run Reverie</a></li>
+        <li><a href="#run">Run LocalGPT Verse</a></li>
         <li><a href="#onboarding">Onboarding</a></li>
         <li><a href="#import">Import your music</a></li>
         <li><a href="#ml">Optional: ML moods</a></li>
@@ -59,33 +59,33 @@
 
   <main class="prose">
 
-    <h2 id="run">Run Reverie</h2>
-    <p>Reverie is a standalone Cargo project built with
+    <h2 id="run">Run LocalGPT Verse</h2>
+    <p>LocalGPT Verse is a standalone Cargo project built with
     <a href="https://bevyengine.org/">Bevy</a>. All you need is a stable Rust
     toolchain — there are no services, accounts, or API keys:</p>
-    <pre><code>git clone https://github.com/localgpt-app/reverie.git
-cd reverie
+    <pre><code>git clone https://github.com/localgpt-app/localgpt-verse.git
+cd localgpt-verse
 cargo run</code></pre>
-    <p>A window titled <b>Reverie</b> opens. Because it declares its own
+    <p>A window titled <b>LocalGPT Verse</b> opens. Because it declares its own
     <code>[workspace]</code>, the project builds the same on its own or checked
     out inside another Cargo workspace.</p>
 
     <h2 id="onboarding">Onboarding</h2>
     <p>The first launch walks you through three steps:</p>
     <ol>
-      <li><b>Photosensitivity</b> — before anything pulses or glows, Reverie
+      <li><b>Photosensitivity</b> — before anything pulses or glows, LocalGPT Verse
         asks about your comfort with flashing light and motion. Your answers
         set the <a href="controls.html#comfort">Comfort options</a>, which you
         can change any time in Settings.</li>
       <li><b>Controls</b> — the fly/look basics and the keys that matter.</li>
-      <li><b>Import</b> — point Reverie at a music folder, or stay with the
+      <li><b>Import</b> — point LocalGPT Verse at a music folder, or stay with the
         built-in demo.</li>
     </ol>
     <p>Click through it, or press <b>Skip setup</b> / <kbd>Enter</kbd> to jump
     straight into a world.</p>
 
     <h2 id="import">Import your music</h2>
-    <p><b>Choose your music folder…</b> opens a native folder picker. Reverie
+    <p><b>Choose your music folder…</b> opens a native folder picker. LocalGPT Verse
     scans the folder — MP3, FLAC, WAV, OGG, M4A, and AIFF — replaces the demo
     queue with your tracks, and plays them through its real audio engine:</p>
     <ul>
@@ -101,9 +101,9 @@ cargo run</code></pre>
     hash and stored in the app data directory — rename- and move-proof, and
     <b>your music folder is never written to</b>. A track is analyzed once,
     then never again.</p>
-    <div class="note"><b>Dev shortcut:</b> <code>REVERIE_IMPORT=&lt;dir&gt; cargo run</code>
+    <div class="note"><b>Dev shortcut:</b> <code>VERSE_IMPORT=&lt;dir&gt; cargo run</code>
     imports that folder at startup. Without an import (or an audio device),
-    Reverie falls back to a silent simulated transport so the HUD and worlds
+    LocalGPT Verse falls back to a silent simulated transport so the HUD and worlds
     still run.</div>
 
     <h2 id="ml">Optional: ML moods</h2>
@@ -136,17 +136,18 @@ cargo run --features llm          # Apple Silicon: --features llm-metal</code></
       <li><b>Agent</b> — a tool-calling session that builds a scene
         entity-by-entity and replays deterministically on every revisit.</li>
     </ul>
-    <p>Without the feature or the model, Reverie keeps the rule-derived world
+    <p>Without the feature or the model, LocalGPT Verse keeps the rule-derived world
     verbatim. See <a href="analysis.html#llm-tiers">Under the hood</a> for how
     both tiers work.</p>
 
     <h2 id="assets">The asset pack</h2>
-    <p>Worlds are furnished from a pack of 52 CC0 Poly Haven models (about 13
-    per mood) that lives in the separate <code>reverie-assets</code> repository
-    and syncs into <code>assets/models/</code>. Every model's source, author,
-    and license is tracked in a manifest — which doubles as the in-app Credits
-    screen. The pack is bundled when the app is packaged, so there is nothing
-    to download at runtime.</p>
+    <p>Worlds are furnished from a pack of 171 CC0 Poly Haven models that lives
+    in the separate <code>verse-assets</code> repository and syncs into
+    <code>assets/models/</code>. The manifest records every model's source,
+    author, license, and a semantic <b>kind</b> (19 kinds, from
+    <code>rock</code> ×29 variants to <code>lamp</code> ×17) — and doubles as
+    the in-app Credits screen. The pack is bundled when the app is packaged, so
+    there is nothing to download at runtime.</p>
 
     <div class="docs-pager">
       <span></span>
@@ -159,7 +160,7 @@ cargo run --features llm          # Apple Silicon: --features llm-metal</code></
   <div class="wrap">
     <div class="footer-grid">
       <div>
-        <h4>Reverie</h4>
+        <h4>LocalGPT Verse</h4>
         <p style="max-width: 26rem;">A desktop app that imagines a 3D world for
         every song — built with <a href="https://bevyengine.org/">Bevy</a>, driven
         by on-device music analysis, and free inside and out.</p>
@@ -177,8 +178,8 @@ cargo run --features llm          # Apple Silicon: --features llm-metal</code></
       <div>
         <h4>Project</h4>
         <ul>
-          <li><a href="https://github.com/localgpt-app/reverie">GitHub</a></li>
-          <li><a href="https://github.com/localgpt-app/reverie/blob/main/LICENSE">Apache-2.0 license</a></li>
+          <li><a href="https://github.com/localgpt-app/localgpt-verse">GitHub</a></li>
+          <li><a href="https://github.com/localgpt-app/localgpt-verse/blob/main/LICENSE">Apache-2.0 license</a></li>
           <li><a href="development.html#licenses">Fonts &amp; asset licenses</a></li>
         </ul>
       </div>

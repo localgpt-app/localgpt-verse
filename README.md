@@ -1,16 +1,16 @@
-# Reverie
+# LocalGPT Verse
 
 A desktop app that imagines a **3D world for every song** — built with
 [Bevy](https://bevyengine.org/). See [`idea.md`](idea.md) for the concept
 (a music-reactive world assembled from free 3D assets, driven by on-device
 music analysis).
 
-This milestone is **UI-first**: the chrome from the Reverie design spec is
+This milestone is **UI-first**: the chrome from the LocalGPT Verse design spec is
 implemented on Bevy UI over a placeholder, mood-tinted 3D world. The music
 analysis + asset-assembly pipeline comes later; for now the transport and beat
 are simulated (`src/playback.rs`) so the HUD is already wired to react.
 
-Reverie is a **standalone Cargo project**: it declares its own `[workspace]`,
+LocalGPT Verse is a **standalone Cargo project**: it declares its own `[workspace]`,
 so it builds the same on its own or checked out inside another Cargo workspace.
 
 **Website:** the marketing landing page and docs live in [`site/`](site/) —
@@ -22,7 +22,7 @@ static HTML/CSS/JS, no build step (`cd site && python3 -m http.server`).
 cargo run
 ```
 
-Opens a window titled **Reverie**. You start in a three-step onboarding
+Opens a window titled **LocalGPT Verse**. You start in a three-step onboarding
 (photosensitivity → controls → import); click through it, or *Skip setup* /
 press **Enter** to jump straight into a world.
 
@@ -37,7 +37,7 @@ pulse and world glow from the real signal, and a **background analysis pass**
 as a JSON sidecar per track (blake3-keyed, in the app data dir; your music
 folder is never written to). *Keep this world* pins the mood into that sidecar.
 Without an import (or an audio device) the app falls back to the silent
-simulated transport. Dev shortcut: `REVERIE_IMPORT=<dir>` imports at startup.
+simulated transport. Dev shortcut: `VERSE_IMPORT=<dir>` imports at startup.
 
 **ML moods (PLAN.md M5, optional):** build with `--features ml` and run
 `scripts/fetch-clap.sh` once (78 MB CLAP audio model, LAION/Xenova ONNX) —
@@ -74,7 +74,7 @@ Every emissive/light value the agent authors passes the Comfort gates at
 execution time. Without the feature or the model the app keeps the
 rule-derived world verbatim (CI compiles both tiers so they can't rot).
 
-**Asset pack:** 171 CC0 Poly Haven models live in the separate `reverie-assets`
+**Asset pack:** 171 CC0 Poly Haven models live in the separate `verse-assets`
 repo (`fetch_polyhaven.py` downloads + writes the manifest with a semantic
 `kind` per asset — 19 kinds, from `rock` ×29 variants to `lamp` ×17;
 `normalize.py` packs each model to a single uncompressed `.glb` — bevy_gltf
@@ -103,7 +103,7 @@ screen renders the manifest.
 | `L` | Open / close the library (pick a world) |
 | `Esc` | Pause (world time-dilates) · resume · close the top overlay |
 | `H` | Hide the HUD now |
-| `P` | Photo mode — hide the chrome and save a shot to `reverie-photos/` |
+| `P` | Photo mode — hide the chrome and save a shot to `verse-photos/` |
 | `←` / `→` | Adjust world intensity (while paused) |
 
 The HUD follows the spec's "one system, three states": **Visible** while you're
@@ -126,7 +126,7 @@ current world's palette.
 - **Comfort** — *Reduce flashing* holds the world glow steady (no beat pulse) and
   caps UI pulses; *Gentler world motion* damps the sway. Both apply instantly.
 - **Photo mode** (`P` or the pause button) — clears the chrome and saves a clean
-  screenshot of the world to `reverie-photos/`.
+  screenshot of the world to `verse-photos/`.
 - **World props** (`src/world_assets.rs`) — the manifest-driven glTF pack:
   per-mood placement in three tiers (hero/prop/ground cover), span-normalized
   from each model's native size, with `VisibilityRange` LOD, per-mood
@@ -144,22 +144,22 @@ remainders — see [PLAN.md](PLAN.md) for the status of each).
 ## Fonts
 
 The design uses **Marcellus** + **Hanken Grotesk** (both OFL). They aren't
-committed yet — drop the `.ttf`s into `assets/fonts/` and Reverie picks them up;
+committed yet — drop the `.ttf`s into `assets/fonts/` and LocalGPT Verse picks them up;
 until then it falls back to Bevy's embedded font. See
 [`assets/fonts/README.md`](assets/fonts/README.md).
 
 ## Smoke test
 
 ```bash
-REVERIE_SMOKE=1 cargo run                    # boots through every screen, then exits
-REVERIE_SMOKE=1 REVERIE_SHOT=/tmp cargo run  # also saves reverie-hud.png / reverie-overlays.png
+VERSE_SMOKE=1 cargo run                    # boots through every screen, then exits
+VERSE_SMOKE=1 VERSE_SHOT=/tmp cargo run  # also saves verse-hud.png / verse-overlays.png
 ```
 
 ## Perf stress test
 
 ```bash
-REVERIE_STRESS=5000 cargo run --release      # spawns 5000 prop instances, logs fps, exits after 30s
-REVERIE_STRESS=0 cargo run --release         # control run: report only, no extra props
+VERSE_STRESS=5000 cargo run --release      # spawns 5000 prop instances, logs fps, exits after 30s
+VERSE_STRESS=0 cargo run --release         # control run: report only, no extra props
 ```
 
 Runs uncapped (vsync off) so the numbers show true frame cost. On the dev
@@ -168,9 +168,9 @@ dense packs beyond that need real instancing (PLAN.md status).
 
 ## License
 
-Reverie's code is licensed under the [Apache License 2.0](LICENSE). The bundled
+LocalGPT Verse's code is licensed under the [Apache License 2.0](LICENSE). The bundled
 fonts (Marcellus, Hanken Grotesk) are under the SIL Open Font License 1.1 — see
 [`assets/fonts/`](assets/fonts/). The 3D model pack and the starter music live in
-the separate `reverie-assets` repository and are dedicated to the public domain
+the separate `verse-assets` repository and are dedicated to the public domain
 under CC0 1.0. The optional model downloads (`scripts/fetch-*.sh`) carry their
 own licenses; the CLAP weights in particular are CC-BY-NC.

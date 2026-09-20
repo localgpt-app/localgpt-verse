@@ -1,4 +1,4 @@
-# Reverie — Backend Plan: Libraries & Implementation Steps
+# LocalGPT Verse — Backend Plan: Libraries & Implementation Steps
 
 The UI-first milestone is done: every screen from the design spec runs over a
 placeholder world, driven by a **simulated** transport and beat
@@ -70,7 +70,7 @@ Two paths, both local:
 | Stems (Demucs) | **Deferred.** Per-band energy (bass/mid/high from the live FFT) approximates stem reactivity at ~zero cost | Revisit post-M6; htdemucs ONNX export is awkward and heavy |
 
 Cache keying: **blake3** content hash (CC0/Apache-2.0). Cache dir via
-**dirs** (`~/Library/Application Support/reverie` / XDG equivalent).
+**dirs** (`~/Library/Application Support/localgpt-verse` / XDG equivalent).
 Analysis artifacts serialize with serde to one JSON/RON sidecar per track.
 
 ### 1.3 Worlds & assets
@@ -148,13 +148,13 @@ attribution already wired through the manifest → Credits screen.
 
 > **2026-07 follow-up** (all on `main`):
 > - **Asset pack: 52 CC0 Poly Haven models** (was 7), ~13 per mood incl. full
->   VELVET CIRCUIT + GLASS EXPANSE coverage; `reverie-assets` gained
+>   VELVET CIRCUIT + GLASS EXPANSE coverage; `verse-assets` gained
 >   `fetch_polyhaven.py` (provenance + reproducibility) and `normalize.py`
 >   (offline .glb packing — **uncompressed**: bevy_gltf supports neither
 >   KHR_mesh_quantization nor EXT_meshopt_compression, so geometry stays
 >   fp32; 173 MB packed). Placement: `VisibilityRange` LOD (R7) + per-mood
 >   layout rules (organic spiral / city grid / crystal rings).
-> - **Perf validated** (`REVERIE_STRESS=N`, uncapped): baseline world ~60 fps;
+> - **Perf validated** (`VERSE_STRESS=N`, uncapped): baseline world ~60 fps;
 >   ~1k scene-root props ≈ 14 fps; 5k ≈ 9 fps. The idea.md "5k instances"
 >   budget is **not** met via scene-root clones — it needs real instancing
 >   (draw-call batching exists; CPU-side scene/entity overhead dominates).
@@ -180,7 +180,7 @@ attribution already wired through the manifest → Credits screen.
 >   combined with **EBU R128 loudness normalization** toward −14 LUFS
 >   (`ebur128` measured in the analysis decode, stored in the sidecar, applied
 >   ±12 dB on the kira sub-track). Section notches now refresh on analysis.
-> - **CC0 starter music** (`reverie-assets/generate_music.py` → 4 original
+> - **CC0 starter music** (`verse-assets/generate_music.py` → 4 original
 >   algorithmic ambient tracks, ~4 MB, CC0-1.0): auto-loaded on first run
 >   through the same import path as user music, so the app **plays
 >   immediately** without a folder pick. `bundle.sh` ships `assets/music/`.
@@ -221,7 +221,7 @@ attribution already wired through the manifest → Credits screen.
 >   into the playing world); the session's closing description is captured in
 >   the cached `SceneBuild` and logged. Step budget 12 → 24.
 > - **CI now compiles both gated tiers** (`cargo check --features llm` / `ml`
->   in the reverie job) — the default-feature gate alone let them rot.
+>   in the localgpt-verse job) — the default-feature gate alone let them rot.
 >
 > **2026-09-12 — runtime-verified with the real model, three defects found &
 > fixed:** Bonsai-8B **Q4_K_M** (5.2 GB, Apache-2.0 — license caveat cleared
@@ -326,8 +326,8 @@ Beat This! ONNX upgrade; WFC structured layouts; grammar-constrained LLM scene
 recipes (llama-cpp-2 or optional Ollama); Demucs stems. Each behind a feature
 flag, none load-bearing.
 
-**Cross-cutting from M1:** add a reverie job to CI (build/clippy/fmt/test,
-`REVERIE_SMOKE` needs a GPU—keep it local-only); `cargo deny` for license
+**Cross-cutting from M1:** add a localgpt-verse job to CI (build/clippy/fmt/test,
+`VERSE_SMOKE` needs a GPU—keep it local-only); `cargo deny` for license
 enforcement; keep `default` features light (`ml` opt-in — ort binaries are
 large).
 
@@ -351,10 +351,10 @@ large).
 ## 5. Open questions & decisions
 
 1. **Starter pack location & distribution — decided.**
-   - *Source control (dev):* a separate `reverie-assets` repo (monorepo
+   - *Source control (dev):* a separate `verse-assets` repo (monorepo
      `*-assets` convention), cloned alongside the app; the app repo keeps only
      fonts + fallback primitives. `assets/models/` is gitignored
-     in the app repo and populated from `reverie-assets`.
+     in the app repo and populated from `verse-assets`.
    - *Distribution (ship):* the packaging step **bundles** the vetted pack into
      the app download — **no first-run asset download**. Rationale: preserves
      the "everything local, nothing uploaded" promise the onboarding makes,
@@ -372,7 +372,7 @@ large).
      for v1.
 2. **Persistence — decided: JSON sidecars.** One JSON per track in the app
    cache dir, named by blake3 content hash (rename/move-proof), e.g.
-   `…/reverie/analysis/<hash>.json` holding beats/sections/key/loudness/
+   `…/localgpt-verse/analysis/<hash>.json` holding beats/sections/key/loudness/
    valence-arousal/mood. Never writes into the user's music folder. Migrate
    to rusqlite (monorepo standard) only when the library view needs
    search/sort at scale; sidecars then become the import format.

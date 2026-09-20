@@ -309,7 +309,7 @@ fn spawn_pause(
                     button(
                         row,
                         fonts,
-                        "Quit Reverie",
+                        "Quit LocalGPT Verse",
                         Some("Q"),
                         ButtonAction::Quit,
                         false,

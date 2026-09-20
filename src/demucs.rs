@@ -62,7 +62,7 @@ mod gated {
         pub fn try_load() -> Option<Self> {
             let out_dir = crate::analysis::cache_dir()
                 .map(|d| d.join("stems"))
-                .unwrap_or_else(|| std::env::temp_dir().join("reverie-stems"));
+                .unwrap_or_else(|| std::env::temp_dir().join("verse-stems"));
             std::fs::create_dir_all(&out_dir).ok();
             info!(
                 "demucs: stem-splitter-core ready (out_dir {})",

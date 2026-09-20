@@ -5308,6 +5308,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "localgpt-verse"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "blake3",
+ "dirs",
+ "ebur128",
+ "kira",
+ "lofty",
+ "mistralrs",
+ "ort",
+ "realfft",
+ "rfd",
+ "rubato 0.16.2",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "stem-splitter-core",
+ "symphonia",
+ "tokenizers 0.21.4",
+ "tokio",
+ "walkdir",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7748,31 +7773,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams 0.5.0",
  "web-sys",
-]
-
-[[package]]
-name = "reverie"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "blake3",
- "dirs",
- "ebur128",
- "kira",
- "lofty",
- "mistralrs",
- "ort",
- "realfft",
- "rfd",
- "rubato 0.16.2",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "stem-splitter-core",
- "symphonia",
- "tokenizers 0.21.4",
- "tokio",
- "walkdir",
 ]
 
 [[package]]

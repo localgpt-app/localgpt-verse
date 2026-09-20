@@ -182,7 +182,7 @@ fn spawn_credits(
 const SOFTWARE_CREDITS: &[(&str, &str, &str, &str)] = &[
     (
         "Bevy Engine",
-        "the engine Reverie runs on",
+        "the engine LocalGPT Verse runs on",
         "Bevy contributors",
         "MIT / Apache-2.0",
     ),

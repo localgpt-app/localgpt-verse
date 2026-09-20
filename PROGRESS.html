@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Reverie — LLM Integration Progress</title>
+<title>LocalGPT Verse — LLM Integration Progress</title>
 <style>
   :root {
     --bg: #0b0d12;
@@ -83,7 +83,7 @@
 </head>
 <body>
 <main>
-  <h1><span class="dot">●</span> Reverie — LLM Integration Progress</h1>
+  <h1><span class="dot">●</span> LocalGPT Verse — LLM Integration Progress</h1>
   <p class="sub">Tracking the gap analysis → fix work on the <code>llm</code> tiers (recipe + agent)
      and the world-interestingness rounds.
      Last updated <strong>2026-09-13</strong> · commits <code>c27f6d2</code> →
@@ -119,13 +119,13 @@
       hero assets by name keywords.
       <span class="where">src/agent.rs · src/world_assets.rs</span></li>
     <li><b>CI compiles the gated tiers.</b> <code>cargo check --features llm</code> and
-      <code>--features ml</code> added to the reverie job — the LLM code can no longer rot
+      <code>--features ml</code> added to the localgpt-verse job — the LLM code can no longer rot
       broken while default-feature CI stays green. Docs (README, PLAN, module headers) updated
       to match reality.
       <span class="where">.github/workflows/ci.yml · README.md · PLAN.md</span></li>
   </ul>
   <p class="note">Gates at the baseline commit: clippy + fmt clean (default <em>and</em> llm
-     features) · 88 tests (default) / 95 (llm) pass · <code>REVERIE_SMOKE=1</code> boots every
+     features) · 88 tests (default) / 95 (llm) pass · <code>VERSE_SMOKE=1</code> boots every
      screen and places props 86 / 79 across a crossfade.</p>
 
   <h2>Runtime verification — done (2026-09-12)</h2>
@@ -243,7 +243,7 @@
       <td><b><s>Embedding-based asset selection.</s></b> <em>Shipped 2026-09-13</em> (track
           audio embedding ranks the manifest; keywords stay the no-model fallback).
           Remaining if ever wanted: manifest <code>tags</code> from a
-          <code>reverie-assets</code> regen would sharpen the text descriptions the ranker
+          <code>verse-assets</code> regen would sharpen the text descriptions the ranker
           embeds.</td>
       <td><span class="pill p2">done</span></td>
       <td>Runtime-verified: 52 assets embedded on a background thread, placement re-runs once on fill.</td>
@@ -276,7 +276,7 @@
       <td class="pri"><span class="pill p3">P3</span></td>
       <td><b>Asset packs for the four new moods</b> — they currently borrow their base
           quadrant’s set (<code>ASSET_BASE_MOODS</code>); distinct sets want a
-          <code>reverie-assets</code> repo regen.</td>
+          <code>verse-assets</code> repo regen.</td>
       <td><span class="pill human">human + Claude</span></td>
       <td>Other-repo change (fetch_polyhaven.py tags).</td>
     </tr>
@@ -292,7 +292,7 @@ cargo test && cargo test --features llm
 cargo check --features ml
 
 # UI/runtime smoke (boots every screen, exits by itself)
-REVERIE_SMOKE=1 cargo run
+VERSE_SMOKE=1 cargo run
 
 # The full LLM path (verified 2026-09-12; recipes in 20–80 s per track)
 scripts/fetch-bonsai.sh

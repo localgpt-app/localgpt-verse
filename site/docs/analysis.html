@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Under the hood — Reverie docs</title>
-<meta name="description" content="How Reverie turns audio into worlds: the signal-ownership ladder, the DSP analysis pass, CLAP embeddings, stem reactivity, and the local LLM recipe and agent tiers.">
+<title>Under the hood — LocalGPT Verse docs</title>
+<meta name="description" content="How LocalGPT Verse turns audio into worlds: the signal-ownership ladder, the DSP analysis pass, CLAP embeddings, stem reactivity, and the local LLM recipe and agent tiers.">
 <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
 <link rel="stylesheet" href="../assets/css/style.css">
 </head>
@@ -14,14 +14,14 @@
   <div class="wrap nav-inner">
     <a class="brand" href="../index.html">
       <img src="../assets/favicon.svg" alt="" width="26" height="26">
-      Reverie
+      LocalGPT Verse
     </a>
     <button class="nav-toggle" aria-label="Menu" aria-expanded="false">☰</button>
     <nav class="nav-links">
       <a href="../index.html">Overview</a>
       <a href="index.html" aria-current="page">Docs</a>
       <a href="worlds.html">Worlds</a>
-      <a href="https://github.com/localgpt-app/reverie">GitHub</a>
+      <a href="https://github.com/localgpt-app/localgpt-verse">GitHub</a>
       <a class="btn btn-primary nav-cta" href="index.html">Get started</a>
     </nav>
   </div>
@@ -62,7 +62,7 @@
   <main class="prose">
 
     <h2 id="ladder">The signal ladder</h2>
-    <p>Reverie's signals are owned by a strict ladder, and each rung is a
+    <p>LocalGPT Verse's signals are owned by a strict ladder, and each rung is a
     strict upgrade with automatic fallback:</p>
     <ol>
       <li><b>Simulation</b> owns everything — a silent transport so the app
@@ -89,7 +89,7 @@
     <ul>
       <li>Rename- and move-proof — the key is the file's contents, not its
         path.</li>
-      <li>Human-debuggable — open one and read exactly what Reverie heard.</li>
+      <li>Human-debuggable — open one and read exactly what LocalGPT Verse heard.</li>
       <li>Never touches the music folder.</li>
       <li>No schema migrations; optional tiers (embeddings, recipes, scene
         builds) are just more fields in the same document.</li>
@@ -146,16 +146,20 @@
     contrasting accent props.</p>
 
     <h3>Agent</h3>
-    <p>The world-builder alternative: a tool-calling loop with seven tools —
-    <code>spawn_primitive</code>, <code>place_asset</code>,
-    <code>modify_entity</code>, <code>delete_entity</code>,
-    <code>set_light</code>, <code>set_environment</code>, and
-    <code>scene_info</code> to review its own work. The
-    <code>place_asset</code> schema's enum <i>is</i> the 52-model manifest, so
-    the model can only name assets that exist. Sessions run to a 24-tool-call
-    budget and cache as a <code>SceneBuild</code>, replayed deterministically
-    on every revisit — entities are scoped to their track, so a lookahead
-    session never pops into the playing world.</p>
+    <p>The world-builder alternative: a tool-calling loop over tools like
+    <code>spawn_primitive</code>, <code>modify_entity</code>,
+    <code>delete_entity</code>, <code>set_light</code>,
+    <code>set_environment</code>, and <code>scene_info</code> to review its own
+    work. With the manifest mounted, <code>place_asset</code> and
+    <code>scatter_field</code> join the set: they place models by <b>kind</b>
+    (<code>rock</code>, <code>tree</code>, <code>lamp</code>, … — 19 kinds), a
+    small stable enum the local model can hold reliably, while the host
+    resolves each call to a concrete variant that fits the track's mood and
+    rotates so repeats differ. Sessions run to a 24-tool-call budget and cache
+    as a <code>SceneBuild</code> that records both the asked kind and the
+    resolved file, replayed deterministically on every revisit — entities are
+    scoped to their track, so a lookahead session never pops into the playing
+    world.</p>
 
     <h2 id="guardrails">Guardrails &amp; fallback</h2>
     <ul>
@@ -171,7 +175,7 @@
     <table>
       <thead><tr><th>Component</th><th>License</th><th>Note</th></tr></thead>
       <tbody>
-        <tr><td>Reverie code</td><td>Apache-2.0</td><td>Commercial-friendly</td></tr>
+        <tr><td>LocalGPT Verse code</td><td>Apache-2.0</td><td>Commercial-friendly</td></tr>
         <tr><td>Rule mood mapper</td><td>Apache-2.0</td><td>The shipping mood tier</td></tr>
         <tr><td>stem-splitter-core (Demucs)</td><td>MIT / Apache-2.0</td><td>Commercial-friendly</td></tr>
         <tr><td>Bonsai-8B weights</td><td>Apache-2.0</td><td>Commercial-friendly</td></tr>
@@ -194,7 +198,7 @@
   <div class="wrap">
     <div class="footer-grid">
       <div>
-        <h4>Reverie</h4>
+        <h4>LocalGPT Verse</h4>
         <p style="max-width: 26rem;">A desktop app that imagines a 3D world for
         every song — built with <a href="https://bevyengine.org/">Bevy</a>, driven
         by on-device music analysis, and free inside and out.</p>
@@ -212,8 +216,8 @@
       <div>
         <h4>Project</h4>
         <ul>
-          <li><a href="https://github.com/localgpt-app/reverie">GitHub</a></li>
-          <li><a href="https://github.com/localgpt-app/reverie/blob/main/LICENSE">Apache-2.0 license</a></li>
+          <li><a href="https://github.com/localgpt-app/localgpt-verse">GitHub</a></li>
+          <li><a href="https://github.com/localgpt-app/localgpt-verse/blob/main/LICENSE">Apache-2.0 license</a></li>
           <li><a href="development.html#licenses">Fonts &amp; asset licenses</a></li>
         </ul>
       </div>

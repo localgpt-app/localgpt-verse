@@ -1,6 +1,6 @@
-# Reverie website
+# LocalGPT Verse website
 
-The marketing landing page and documentation for Reverie. Hand-written static
+The marketing landing page and documentation for LocalGPT Verse. Hand-written static
 HTML/CSS/JS — no build step, no dependencies.
 
 ## View locally

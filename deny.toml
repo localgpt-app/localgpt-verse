@@ -1,4 +1,4 @@
-# cargo-deny policy for Reverie — https://embarkstudios.github.io/cargo-deny/
+# cargo-deny policy for LocalGPT Verse — https://embarkstudios.github.io/cargo-deny/
 #
 # CI runs this file as two jobs (.github/workflows/ci.yml):
 # - licenses, bans, sources — blocking. These only change when Cargo.lock does,

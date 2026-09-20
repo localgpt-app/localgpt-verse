@@ -1,6 +1,6 @@
 //! Persistent app settings — the one file (besides the analysis sidecars) that
 //! survives a restart. Stored as JSON next to the analysis cache under the
-//! user's local app-data dir (`<local>/reverie/settings.json`).
+//! user's local app-data dir (`<local>/localgpt-verse/settings.json`).
 //!
 //! Holds the user-adjustable resources that reset to defaults every launch
 //! today: Comfort toggles, volume, world intensity, camera mode, the onboarding
@@ -61,12 +61,12 @@ fn default_world_intensity() -> f32 {
     0.5
 }
 
-/// Where the settings file lives: `<local app data>/reverie/settings.json`,
-/// the same `reverie/` root as the analysis cache.
+/// Where the settings file lives: `<local app data>/localgpt-verse/settings.json`,
+/// the same `localgpt-verse/` root as the analysis cache.
 pub fn settings_path() -> Option<PathBuf> {
     Some(
         dirs::data_local_dir()?
-            .join("reverie")
+            .join("localgpt-verse")
             .join("settings.json"),
     )
 }

@@ -1,6 +1,6 @@
 # Fonts
 
-Reverie's two typefaces, both under the SIL Open Font License (safe to bundle
+LocalGPT Verse's two typefaces, both under the SIL Open Font License (safe to bundle
 and redistribute):
 
 - **Marcellus** (`Marcellus-Regular.ttf`) — serif display face for world names

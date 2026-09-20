@@ -131,7 +131,7 @@ fn spawn_settings(commands: &mut Commands, fonts: &Fonts, theme: &Theme, comfort
                 label_text(
                     card,
                     fonts,
-                    "Reverie should feel good to be in. These apply instantly.",
+                    "LocalGPT Verse should feel good to be in. These apply instantly.",
                     12.5,
                     theme::text_muted(),
                     false,

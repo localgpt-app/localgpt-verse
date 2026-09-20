@@ -314,7 +314,7 @@ mod tests {
     /// A unique temp dir for model-discovery tests; caller drops it.
     fn temp_llm_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "reverie-llm-test-{tag}-{}",
+            "verse-llm-test-{tag}-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -330,7 +330,7 @@ mod tests {
         // graceful-fallback path. Tested against a temp dir so a fetched model
         // on the dev machine can't flip the result.
         assert!(locate_model_in(&temp_llm_dir("empty")).is_none());
-        assert!(locate_model_in(&PathBuf::from("/nonexistent/reverie-llm")).is_none());
+        assert!(locate_model_in(&PathBuf::from("/nonexistent/verse-llm")).is_none());
     }
 
     #[test]

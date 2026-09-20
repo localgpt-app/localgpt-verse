@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Assemble a distributable Reverie bundle (PLAN.md §5.1: assets are bundled at
-# ship time from the separate reverie-assets repo — no first-run download).
+# Assemble a distributable LocalGPT Verse bundle (PLAN.md §5.1: assets are bundled at
+# ship time from the separate verse-assets repo — no first-run download).
 #
 # Usage: scripts/bundle.sh
-#   REVERIE_ASSETS=<path>  override the reverie-assets checkout location
-#                          (default: ../reverie-assets, a sibling checkout)
+#   VERSE_ASSETS=<path>  override the verse-assets checkout location
+#                          (default: ../verse-assets, a sibling checkout)
 #
 # Produces dist/ with the release binary + assets/ beside it. The
 # bundle is portable and launchable from anywhere: the binary resolves assets
 # from its own directory, not the working directory (world_assets::asset_root).
 # Platform packaging builds on this layout — a macOS .app instead puts assets/
 # in Contents/Resources/, and a packager that needs a third layout (a Flatpak
-# installing to /app/share) sets REVERIE_ASSET_ROOT in the launcher.
+# installing to /app/share) sets VERSE_ASSET_ROOT in the launcher.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ASSETS_REPO="${REVERIE_ASSETS:-../reverie-assets}"
+ASSETS_REPO="${VERSE_ASSETS:-../verse-assets}"
 
 echo "==> release build"
 cargo build --release
@@ -23,7 +23,7 @@ cargo build --release
 echo "==> assembling dist/"
 rm -rf dist
 mkdir -p dist/assets
-cp "${CARGO_TARGET_DIR:-target}/release/reverie" dist/
+cp "${CARGO_TARGET_DIR:-target}/release/localgpt-verse" dist/
 cp -R assets/fonts dist/assets/fonts
 
 if [ -d "$ASSETS_REPO/models" ]; then
@@ -46,4 +46,4 @@ else
 fi
 
 du -sh dist
-echo "done: $(pwd)/dist — run dist/reverie from anywhere"
+echo "done: $(pwd)/dist — run dist/localgpt-verse from anywhere"

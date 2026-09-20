@@ -1,6 +1,6 @@
 //! Real 3D world props — PLAN.md M6.
 //!
-//! Loads a manifest of CC0 glTF models (bundled from the `reverie-assets`
+//! Loads a manifest of CC0 glTF models (bundled from the `verse-assets`
 //! repo into `assets/models/`) and places them on the ground per world mood,
 //! in three tiers (hero landmarks / medium props / ground scatter). These are
 //! grounded *features*; the procedural drifters in `world.rs` stay as floating
@@ -92,7 +92,7 @@ pub struct AssetEntry {
     /// Index into [`crate::theme::moods()`].
     ///
     /// Positional, and written by `fetch_polyhaven.py` in the separate
-    /// `reverie-assets` repo — so reordering [`crate::theme::moods()`] silently
+    /// `verse-assets` repo — so reordering [`crate::theme::moods()`] silently
     /// repoints all 52 assets, and nothing in this repo would catch it. Read
     /// through [`AssetEntry::mood_index`], which prefers `mood_id`.
     pub mood: usize,
@@ -614,7 +614,7 @@ pub fn rise_props(
     }
 }
 
-/// The directory Reverie loads bundled assets from.
+/// The directory LocalGPT Verse loads bundled assets from.
 ///
 /// Everything resolves through here: the Bevy asset server (pinned to this
 /// path via `AssetPlugin::file_path` in `main`) and the direct-filesystem
@@ -623,13 +623,13 @@ pub fn rise_props(
 /// One root means those two halves cannot disagree about where `assets/` is.
 ///
 /// Resolved once, in this order:
-/// 1. `REVERIE_ASSET_ROOT` — explicit override.
+/// 1. `VERSE_ASSET_ROOT` — explicit override.
 /// 2. `<exe dir>/assets` — the shipped layout (`scripts/bundle.sh`, the
 ///    Windows zip, the Linux tarball).
 /// 3. `<exe dir>/../Resources/assets` — inside a macOS `.app`, where the
 ///    binary sits in `Contents/MacOS/` and its data in `Contents/Resources/`.
 /// 4. `CARGO_MANIFEST_DIR/assets` — the dev tree, baked at compile time, so
-///    `cargo run` and a bare `target/release/reverie` work from any cwd.
+///    `cargo run` and a bare `target/release/localgpt-verse` work from any cwd.
 /// 5. `assets` — relative last resort.
 ///
 /// Exe-relative comes before the dev tree so a packaged build never prefers a
@@ -642,7 +642,7 @@ pub(crate) fn asset_root() -> std::path::PathBuf {
 }
 
 fn resolve_asset_root() -> std::path::PathBuf {
-    if let Some(over) = std::env::var_os("REVERIE_ASSET_ROOT") {
+    if let Some(over) = std::env::var_os("VERSE_ASSET_ROOT") {
         return std::path::PathBuf::from(over);
     }
     if let Ok(exe) = std::env::current_exe()
@@ -652,7 +652,7 @@ fn resolve_asset_root() -> std::path::PathBuf {
         if beside_exe.is_dir() {
             return beside_exe;
         }
-        // `Contents/MacOS/reverie` → `Contents/Resources/assets`. Harmless to
+        // `Contents/MacOS/localgpt-verse` → `Contents/Resources/assets`. Harmless to
         // probe elsewhere; no other platform lays a bundle out this way.
         if let Some(contents) = dir.parent() {
             let in_bundle = contents.join("Resources").join("assets");
@@ -1369,9 +1369,9 @@ fn landmark_anchor(anchor: crate::recipe::Anchor, i: usize) -> Vec3 {
     }
 }
 
-// --- perf stress test (REVERIE_STRESS) ---------------------------------------
+// --- perf stress test (VERSE_STRESS) ---------------------------------------
 
-/// Dev perf validation: `REVERIE_STRESS=5000 cargo run` spawns that many prop
+/// Dev perf validation: `VERSE_STRESS=5000 cargo run` spawns that many prop
 /// instances (cycling the current mood's manifest set) and logs frame rates —
 /// the idea.md Stage-1 budget is 60 fps @ ~5k instances on a mid GPU, which
 /// ARCHITECTURE §3 flags as an unvalidated claim until measured.
@@ -1387,7 +1387,7 @@ pub struct StressTest {
 
 impl StressTest {
     pub fn from_env() -> Option<Self> {
-        let target = std::env::var("REVERIE_STRESS").ok()?.parse().ok()?;
+        let target = std::env::var("VERSE_STRESS").ok()?.parse().ok()?;
         // N=0 is the control run: no props, just the frame-rate report.
         Some(Self {
             target,
@@ -1494,7 +1494,7 @@ mod tests {
     use super::*;
 
     /// A relative root is the packaging bug: it happens to work while the
-    /// working directory is the app's own (`cargo run`, `./reverie` inside
+    /// working directory is the app's own (`cargo run`, `./localgpt-verse` inside
     /// `dist/`) and silently resolves to nothing the moment the app is
     /// launched from Finder or a shortcut — no models, no fonts, no starter
     /// music, no ML tiers, and a procedural world instead of an error.

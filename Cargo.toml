@@ -1,9 +1,9 @@
 [package]
-name = "reverie"
+name = "localgpt-verse"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "Reverie — a desktop app that imagines a 3D world for every song"
+description = "LocalGPT Verse — a desktop app that imagines a 3D world for every song"
 
 # Its own workspace root, so a checkout nested inside another Cargo workspace
 # (say, beside other Rust projects in a monorepo) is never absorbed into it.
@@ -77,7 +77,7 @@ llm-metal = ["llm", "mistralrs/metal"]
 
 [dependencies.ort]
 # Pinned to rc.11 to match `stem-splitter-core` (which pins =2.0.0-rc.11). The
-# LocalGPT's fastembed uses rc.12, but Reverie is a standalone workspace and its
+# LocalGPT's fastembed uses rc.12, but LocalGPT Verse is a standalone workspace and its
 # ort API usage (Session/Tensor/run) is identical across rc.11↔rc.12.
 version = "=2.0.0-rc.11"
 optional = true

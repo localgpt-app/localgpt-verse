@@ -171,7 +171,7 @@ impl TrackAnalysis {
 }
 
 pub(crate) fn cache_dir() -> Option<PathBuf> {
-    let dir = dirs::data_local_dir()?.join("reverie").join("analysis");
+    let dir = dirs::data_local_dir()?.join("localgpt-verse").join("analysis");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }

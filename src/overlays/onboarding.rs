@@ -91,7 +91,7 @@ fn build_onboarding(commands: &mut Commands, fonts: &Fonts, theme: &Theme, step:
                 _ => {
                     label_text(c, fonts, "Bring your music", 40.0, TEXT, true);
                     spacer(c, 14.0);
-                    centered_body(c, fonts, "Reverie plays the files already on this computer and imagines a\nworld for every song. Point it at a folder — nothing is uploaded, ever.");
+                    centered_body(c, fonts, "LocalGPT Verse plays the files already on this computer and imagines a\nworld for every song. Point it at a folder — nothing is uploaded, ever.");
                     spacer(c, 30.0);
                     c.spawn(Node { column_gap: Val::Px(12.0), align_items: AlignItems::Center, ..default() })
                         .with_children(|row| {

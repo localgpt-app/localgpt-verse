@@ -1,4 +1,4 @@
-//! Design tokens for Reverie's UI — the single source of truth for the
+//! Design tokens for LocalGPT Verse's UI — the single source of truth for the
 //! "chrome rents, it doesn't own" aesthetic described in the design spec.
 //!
 //! The rule from the spec: **the chrome never changes; only the accent does.**

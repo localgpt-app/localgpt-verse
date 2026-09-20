@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Worlds &amp; moods — Reverie docs</title>
-<meta name="description" content="The eight worlds of Reverie — Ember Flats, Velvet Circuit, Tide Gardens, Glass Expanse, and their quadrant variants — and how a song finds, furnishes, and performs its world.">
+<title>Worlds &amp; moods — LocalGPT Verse docs</title>
+<meta name="description" content="The eight worlds of LocalGPT Verse — Ember Flats, Velvet Circuit, Tide Gardens, Glass Expanse, and their quadrant variants — and how a song finds, furnishes, and performs its world.">
 <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
 <link rel="stylesheet" href="../assets/css/style.css">
 </head>
@@ -14,14 +14,14 @@
   <div class="wrap nav-inner">
     <a class="brand" href="../index.html">
       <img src="../assets/favicon.svg" alt="" width="26" height="26">
-      Reverie
+      LocalGPT Verse
     </a>
     <button class="nav-toggle" aria-label="Menu" aria-expanded="false">☰</button>
     <nav class="nav-links">
       <a href="../index.html">Overview</a>
       <a href="index.html" aria-current="page">Docs</a>
       <a href="worlds.html">Worlds</a>
-      <a href="https://github.com/localgpt-app/reverie">GitHub</a>
+      <a href="https://github.com/localgpt-app/localgpt-verse">GitHub</a>
       <a class="btn btn-primary nav-cta" href="index.html">Get started</a>
     </nav>
   </div>
@@ -114,9 +114,8 @@
     under a pale rose sky.</p>
 
     <h2 id="assets">How a world is furnished</h2>
-    <p>Worlds draw from the manifest-driven pack of 52 CC0 Poly Haven models
-    (~13 per base mood; variants borrow their base's set), placed in three
-    tiers:</p>
+    <p>Worlds draw from the manifest-driven pack of 171 CC0 Poly Haven models
+    (variants borrow their base quadrant's set), placed in three tiers:</p>
     <table>
       <thead><tr><th>Tier</th><th>Target span</th><th>Role</th></tr></thead>
       <tbody>
@@ -126,6 +125,10 @@
       </tbody>
     </table>
     <ul>
+      <li>Placement holds a per-tier <b>entity budget</b> (15 heroes / 25
+        props / 27 cover seeds) and spends it across the mood's pool by
+        weighted round-robin — a bigger pack means more variety, not more
+        entities.</li>
       <li>Every model is <b>span-normalized</b> from its native dimensions in
         the manifest (Poly Haven scans span 0.1–92 m) so nothing swallows the
         camera.</li>
@@ -181,7 +184,7 @@
   <div class="wrap">
     <div class="footer-grid">
       <div>
-        <h4>Reverie</h4>
+        <h4>LocalGPT Verse</h4>
         <p style="max-width: 26rem;">A desktop app that imagines a 3D world for
         every song — built with <a href="https://bevyengine.org/">Bevy</a>, driven
         by on-device music analysis, and free inside and out.</p>
@@ -199,8 +202,8 @@
       <div>
         <h4>Project</h4>
         <ul>
-          <li><a href="https://github.com/localgpt-app/reverie">GitHub</a></li>
-          <li><a href="https://github.com/localgpt-app/reverie/blob/main/LICENSE">Apache-2.0 license</a></li>
+          <li><a href="https://github.com/localgpt-app/localgpt-verse">GitHub</a></li>
+          <li><a href="https://github.com/localgpt-app/localgpt-verse/blob/main/LICENSE">Apache-2.0 license</a></li>
           <li><a href="development.html#licenses">Fonts &amp; asset licenses</a></li>
         </ul>
       </div>

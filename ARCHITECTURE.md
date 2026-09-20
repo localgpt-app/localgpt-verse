@@ -1,8 +1,8 @@
-# Reverie — Architecture Review (as built)
+# LocalGPT Verse — Architecture Review (as built)
 
 **Status:** Accepted (review of shipped M1–M6 state)
 **Date:** 2026-07-11
-**Scope:** `apps/reverie` (5,143 lines, 9 modules) + `reverie-assets`, evaluated
+**Scope:** `localgpt-verse` (5,143 lines, 9 modules) + `verse-assets`, evaluated
 against `idea.md` (product research) and the design spec's timing promises.
 **Verdict up front:** the architecture is sound for its scale and matches the
 product thesis; nothing needs a rewrite. The two structural debts worth paying
@@ -31,7 +31,7 @@ sprawl). Everything else is maintenance-grade.
 │   procedural ambient + manifest props    │   │   → mpsc, JSON sidecars   │
 └──────────────────────────────────────────┘   └───────────────────────────┘
          persistence: blake3-keyed sidecars in the app data dir
-         assets: reverie-assets repo → assets/models/ (bundled at ship)
+         assets: verse-assets repo → assets/models/ (bundled at ship)
 ```
 
 Threading is channel/atomic-only across boundaries; the single shared-state
@@ -99,14 +99,14 @@ plan — no new dependencies, no downloads, data already cached.
 | # | Severity | Finding | Note |
 |---|---|---|---|
 | R1 | High (product) | No transition engine (§4) | Data + mechanism exist; wire A→B dual-stream crossfade scheduled on B's nearest section boundary + keyframed materialize against the beat grid |
-| R2 | High (process) | **Reverie is not in CI.** Monorepo CI builds `localgpt` workspace only; the standalone reverie workspace is never compiled/tested upstream | Add a CI job: build + clippy + fmt + `cargo test` (headless; no smoke) |
+| R2 | High (process) | **LocalGPT Verse is not in CI.** Monorepo CI builds `localgpt` workspace only; the standalone localgpt-verse workspace is never compiled/tested upstream | Add a CI job: build + clippy + fmt + `cargo test` (headless; no smoke) |
 | R3 | Med (structure) | `overlays.rs` = 1,737 lines (34% of app); `handle_buttons` takes 14 `ResMut`s and grows with every action | Split per-overlay modules; dispatch `ButtonAction` as a Bevy message/observer so handlers take only what they touch |
 | R4 | Med (structure) | Overlay state = 5 independent bools (`Paused`, `QueueOpen`, `SettingsOpen`, `CreditsOpen`, `LibraryOpen`) with hand-ordered Esc priority | Replace with one `enum OverlayStack` (or Bevy sub-states); Esc = pop |
 | R5 | Med (correctness-later) | Track identity is `PathBuf` (in-memory analysis map, `playing` key) + blake3 (sidecars). Fine today; queue reorder ("drag to reorder" is promised in the queue panel) and dedupe will want a stable `TrackId` | Introduce `TrackId(blake3)` on import; key everything on it |
 | R6 | Med (spec) | "Keep this world" pins **mood only**; PLAN §5.3 decided `{mood, seed}` but world generation takes no seed — "Build a different world" cycles mood instead of re-rolling layout | Add a layout seed to prop placement; store it in the pin |
 | R7 | Low (perf, deferred) | No `VisibilityRange`/instancing; placement counts hard-coded | Only matters when packs grow past ~hundreds of props; add with the next asset expansion |
-| R8 | Low (env) | GPU screenshot readback intermittently returns black frames on this machine (workaround: `REVERIE_ONESHOT` + retry) | Affects Photo mode UX too — consider a retry-on-black in `photo_capture` |
-| R9 | Low (packaging) | "Bundle at ship-time" has no implementing step; dev copy was manual | Add an `xtask bundle` (copy `reverie-assets/models` + fonts, build release) when distribution nears |
+| R8 | Low (env) | GPU screenshot readback intermittently returns black frames on this machine (workaround: `VERSE_ONESHOT` + retry) | Affects Photo mode UX too — consider a retry-on-black in `photo_capture` |
+| R9 | Low (packaging) | "Bundle at ship-time" has no implementing step; dev copy was manual | Add an `xtask bundle` (copy `verse-assets/models` + fonts, build release) when distribution nears |
 | R10 | Low (docs) | PLAN marks M3 "done" though its crossfade exit criterion wasn't met (see §4) | This review is the correction; fold R1 into the next milestone |
 
 Non-findings worth recording: `bevy_audio` is *not* in Bevy 0.19's default
@@ -136,7 +136,7 @@ only unprotected-regression surface in the monorepo.
 
 ## 7. Action items
 
-1. [ ] R2/D4: add reverie job to `.github/workflows/ci.yml` (build, clippy,
+1. [ ] R2/D4: add a localgpt-verse job to `.github/workflows/ci.yml` (build, clippy,
    fmt, test; no GPU steps)
 2. [ ] R1/D1: transition engine — dual-stream crossfade on kira clocks landing
    on the incoming track's section boundary; keyframed materialize settling on
@@ -155,14 +155,14 @@ All actionable findings were fixed the day of the review:
 | # | Status | Commit |
 |---|---|---|
 | R1 | **Fixed** — dual-stream equal-power crossfade (final `min(6s, 25%)` window), 0.8s palette wash, staggered prop materialize settling on the incoming track's first downbeat; same-mood morphs in place | `1b995a5` |
-| R2 | **Fixed** — dedicated reverie CI job (fmt/clippy/test) | LocalGPT `78d6ede`; now `.github/workflows/ci.yml` |
+| R2 | **Fixed** — dedicated localgpt-verse CI job (fmt/clippy/test) | LocalGPT `78d6ede`; now `.github/workflows/ci.yml` |
 | R3 | **Fixed** — `dispatch_buttons` + `UiAction` messages + five focused handlers; `overlays.rs` split into 9 modules (largest 353 lines). Bonus: fixed the Resume button not restoring `playback.playing` | `6f674e4` |
 | R4 | **Fixed** — `OverlayStack` (Esc pops); Paused stays transport state, queue stays a panel | `6f674e4` |
 | R5 | **Mitigated** — `playing` is path-keyed, so queue reorder won't restart the current track; a content-hash `TrackId` remains deferred until dedupe needs it | `1b995a5` |
 | R6 | **Fixed** — splitmix64-seeded layouts, per-track default seed, re-roll on "Build a different world", pin stores `{mood, seed}` | `f0b6699` |
 | R7 | Deferred by design — LOD/instancing with the next asset-pack expansion | — |
 | R8 | **Fixed** — photo mode samples the readback and retries black frames (bounded, single output path) | `baf0118` |
-| R9 | **Fixed** — `scripts/bundle.sh` assembles dist/ (release binary + fonts + models from `reverie-assets`) | this commit |
+| R9 | **Fixed** — `scripts/bundle.sh` assembles dist/ (release binary + fonts + models from `verse-assets`) | this commit |
 | R10 | **Fixed** — PLAN status corrected; transition engine actually built (R1) | `1b995a5` |
 
 ## 9. Follow-up findings (2026-07, post-review work)

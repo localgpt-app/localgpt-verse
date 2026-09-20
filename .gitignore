@@ -1,6 +1,6 @@
 /target
-/reverie-photos
-# Bundled assets live in the separate `reverie-assets` repo; copied in for dev
+/verse-photos
+# Bundled assets live in the separate `verse-assets` repo; copied in for dev
 # and at packaging time (PLAN.md §5). Fonts README stays tracked.
 /assets/models
 /dist
@@ -8,7 +8,7 @@
 # only the small precomputed mood_text_embeddings.json is tracked.
 /assets/ml/*.onnx
 /assets/ml/tokenizer.json
-# Starter music: source of truth is reverie-assets/music, copied in for dev
+# Starter music: source of truth is verse-assets/music, copied in for dev
 /assets/music
 # LLM model (M7): downloaded via scripts/fetch-bonsai.sh, never committed
 /assets/llm

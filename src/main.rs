@@ -1,4 +1,4 @@
-//! Reverie — a desktop app that imagines a 3D world for every song.
+//! LocalGPT Verse — a desktop app that imagines a 3D world for every song.
 //!
 //! This milestone is **UI-first**: the chrome from the imported design spec is
 //! built on Bevy UI over a placeholder mood-tinted world. The music-analysis
@@ -197,7 +197,7 @@ impl Default for WorldClock {
 
 fn main() {
     let mut window = Window {
-        title: "Reverie".to_string(),
+        title: "LocalGPT Verse".to_string(),
         resolution: (1280, 800).into(),
         ..default()
     };
@@ -228,7 +228,7 @@ fn main() {
             }),
     )
     // What the app is made of; see `plugins`.
-    .add_plugins(plugins::ReveriePlugins);
+    .add_plugins(plugins::VersePlugins);
 
     // The analysis worker is the app's one long-lived owner of heavyweight
     // state (the CLAP, demucs, and recipe models), so it mounts in a scope
@@ -238,13 +238,13 @@ fn main() {
     let deps = analysis::WorkerDeps::from_world(app.world());
     analysis::mount_analysis(app.world_mut(), deps);
 
-    // `REVERIE_PACK=1 cargo run` mounts a demo world pack, exercising runtime
+    // `VERSE_PACK=1 cargo run` mounts a demo world pack, exercising runtime
     // mount/withdraw against the live registry. See `mood_pack`.
     mood_pack::mount_demo_pack_if_requested(app.world_mut());
 
-    // `REVERIE_SCOPES=1 cargo run` lists what is mounted and what each unit
+    // `VERSE_SCOPES=1 cargo run` lists what is mounted and what each unit
     // will unwind, so a registration that fails to dispose is findable.
-    if std::env::var("REVERIE_SCOPES").is_ok() {
+    if std::env::var("VERSE_SCOPES").is_ok() {
         scope::describe(app.world());
     }
 
@@ -252,7 +252,7 @@ fn main() {
 }
 
 /// Walk the app through its screens for the smoke test, then exit cleanly.
-/// Set `REVERIE_SHOT=<dir>` to also save PNG screenshots of each surface.
+/// Set `VERSE_SHOT=<dir>` to also save PNG screenshots of each surface.
 #[allow(clippy::too_many_arguments)]
 fn smoke_drive(
     time: Res<Time>,
@@ -270,11 +270,11 @@ fn smoke_drive(
     mut phase: Local<u8>,
 ) {
     let t = time.elapsed_secs();
-    let dir = std::env::var("REVERIE_SHOT").ok();
+    let dir = std::env::var("VERSE_SHOT").ok();
 
     // Single settled capture of the loaded world (avoids the multi-screenshot
     // readback flakiness): straight to the world, one shot at 6s, exit at 8s.
-    if std::env::var("REVERIE_ONESHOT").is_ok() {
+    if std::env::var("VERSE_ONESHOT").is_ok() {
         if t > 0.5 && *state.get() == AppState::FirstRun {
             next.set(AppState::InWorld);
         }
@@ -286,7 +286,7 @@ fn smoke_drive(
         }
         if t > 6.0 && *phase == 1 {
             *phase = 2;
-            shot(&mut commands, &dir, "reverie-world.png");
+            shot(&mut commands, &dir, "verse-world.png");
         }
         if t > 8.0 {
             exit.write(AppExit::Success);
@@ -297,21 +297,21 @@ fn smoke_drive(
     // --- Onboarding walk (FirstRun) ---
     if t > 0.4 && *phase == 0 {
         *phase = 1;
-        shot(&mut commands, &dir, "reverie-onboard-1.png");
+        shot(&mut commands, &dir, "verse-onboard-1.png");
     }
     if t > 0.8 {
         onboarding.step = 1;
     }
     if t > 1.2 && *phase == 1 {
         *phase = 2;
-        shot(&mut commands, &dir, "reverie-onboard-2.png");
+        shot(&mut commands, &dir, "verse-onboard-2.png");
     }
     if t > 1.6 {
         onboarding.step = 2;
     }
     if t > 2.0 && *phase == 2 {
         *phase = 3;
-        shot(&mut commands, &dir, "reverie-onboard-3.png");
+        shot(&mut commands, &dir, "verse-onboard-3.png");
     }
     if t > 2.4 && *state.get() == AppState::FirstRun {
         next.set(AppState::InWorld); // spawns the HUD
@@ -320,14 +320,14 @@ fn smoke_drive(
     // --- In-world walk ---
     if t > 3.0 && *phase == 3 {
         *phase = 4;
-        shot(&mut commands, &dir, "reverie-hud.png");
+        shot(&mut commands, &dir, "verse-hud.png");
     }
     if t > 3.3 {
         stack.open(Overlay::Library); // spawns the library
     }
     if t > 3.9 && *phase == 4 {
         *phase = 5;
-        shot(&mut commands, &dir, "reverie-library.png");
+        shot(&mut commands, &dir, "verse-library.png");
         stack.close(Overlay::Library);
     }
     if t > 4.3 {
@@ -338,7 +338,7 @@ fn smoke_drive(
     }
     if t > 5.3 && *phase == 5 {
         *phase = 6;
-        shot(&mut commands, &dir, "reverie-overlays.png");
+        shot(&mut commands, &dir, "verse-overlays.png");
     }
     if t > 5.7 {
         queue_open.0 = false;
@@ -348,14 +348,14 @@ fn smoke_drive(
     }
     if t > 6.3 && *phase == 6 {
         *phase = 7;
-        shot(&mut commands, &dir, "reverie-settings.png");
+        shot(&mut commands, &dir, "verse-settings.png");
     }
     if t > 6.7 {
         stack.open(Overlay::Credits);
     }
     if t > 7.3 && *phase == 7 {
         *phase = 8;
-        shot(&mut commands, &dir, "reverie-credits.png");
+        shot(&mut commands, &dir, "verse-credits.png");
     }
     if t > 7.5 {
         stack.clear();
@@ -384,10 +384,10 @@ fn not_paused(paused: Res<Paused>) -> bool {
     !paused.0
 }
 
-/// Dev/smoke hook: `REVERIE_IMPORT=<dir>` imports a folder at startup,
+/// Dev/smoke hook: `VERSE_IMPORT=<dir>` imports a folder at startup,
 /// skipping the folder picker.
 fn auto_import(mut import: ResMut<audio::ImportState>) {
-    if let Ok(dir) = std::env::var("REVERIE_IMPORT") {
+    if let Ok(dir) = std::env::var("VERSE_IMPORT") {
         audio::start_import(std::path::PathBuf::from(dir), &mut import);
         return;
     }
@@ -404,7 +404,7 @@ fn auto_import(mut import: ResMut<audio::ImportState>) {
 /// (Comfort/Volume/WorldIntensity/CameraMode/Onboarding) with the saved
 /// values. Also stores the loaded [`settings::AppSettings`] as a resource so
 /// the debounced saver can diff against it, and re-imports the last folder
-/// (unless `REVERIE_IMPORT` is set, which takes precedence).
+/// (unless `VERSE_IMPORT` is set, which takes precedence).
 #[allow(clippy::too_many_arguments)]
 fn apply_loaded_settings(
     mut comfort: ResMut<Comfort>,
@@ -426,7 +426,7 @@ fn apply_loaded_settings(
         onboarding.step = u8::MAX;
     }
     // Re-import the most recently opened folder (env override wins).
-    if std::env::var("REVERIE_IMPORT").is_err()
+    if std::env::var("VERSE_IMPORT").is_err()
         && let Some(folder) = loaded.last_folders.last()
         && folder.exists()
     {
@@ -492,7 +492,7 @@ fn save_settings_debounced(
 }
 
 /// Photo mode: force the HUD hidden, then capture a clean screenshot to
-/// `reverie-photos/`. Runs for a few frames so the chrome fully fades first.
+/// `verse-photos/`. Runs for a few frames so the chrome fully fades first.
 fn photo_capture(
     mut photo: ResMut<Photo>,
     mut activity: ResMut<HudActivity>,
@@ -509,7 +509,7 @@ fn photo_capture(
 
     if n == 0 {
         let path = photo.path.get_or_insert_with(photo_path).clone();
-        info!("Reverie photo saved to {path}");
+        info!("LocalGPT Verse photo saved to {path}");
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(path))
@@ -540,15 +540,15 @@ fn photo_black_check(event: On<ScreenshotCaptured>, mut photo: ResMut<Photo>) {
     }
 }
 
-/// A timestamped path under `reverie-photos/` (created on demand).
+/// A timestamped path under `verse-photos/` (created on demand).
 fn photo_path() -> String {
-    let dir = "reverie-photos";
+    let dir = "verse-photos";
     let _ = std::fs::create_dir_all(dir);
     let ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    format!("{dir}/reverie-{ms}.png")
+    format!("{dir}/verse-{ms}.png")
 }
 
 /// Ease the world timescale toward its target (time-dilation while frozen).

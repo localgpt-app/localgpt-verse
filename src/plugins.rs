@@ -41,10 +41,10 @@ use crate::{
 };
 use crate::{analysis, audio, hud, overlays, playback, recipe, theme, world, world_assets};
 
-/// Everything Reverie adds on top of `DefaultPlugins`.
-pub struct ReveriePlugins;
+/// Everything LocalGPT Verse adds on top of `DefaultPlugins`.
+pub struct VersePlugins;
 
-impl Plugin for ReveriePlugins {
+impl Plugin for VersePlugins {
     fn build(&self, app: &mut App) {
         app.add_plugins((
             AppStatePlugin,
@@ -349,13 +349,13 @@ struct DiagnosticsPlugin;
 
 impl Plugin for DiagnosticsPlugin {
     fn build(&self, app: &mut App) {
-        // `REVERIE_SMOKE=1 cargo run` drives the app through every UI surface
+        // `VERSE_SMOKE=1 cargo run` drives the app through every UI surface
         // (world → queue → pause) then exits — a headful boot check.
-        if std::env::var("REVERIE_SMOKE").is_ok() {
+        if std::env::var("VERSE_SMOKE").is_ok() {
             app.add_systems(Update, crate::smoke_drive);
         }
 
-        // `REVERIE_STRESS=5000 cargo run` fills the world with prop instances
+        // `VERSE_STRESS=5000 cargo run` fills the world with prop instances
         // and logs frame rates, then exits after 30 s. Skips onboarding so the
         // measurement starts immediately (needs the asset pack).
         if let Some(stress) = world_assets::StressTest::from_env() {
