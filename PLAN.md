@@ -131,6 +131,21 @@ attribution already wired through the manifest → Credits screen.
 > settling on the incoming track's first downbeat; same-mood morphs in place).
 > Fonts (Marcellus + Hanken Grotesk, OFL) bundled.
 >
+> **2026-09 follow-up** (all on `main`):
+> - **Kind-based asset vocabulary (manifest v2):** the pack grew 52 → 171
+>   CC0 Poly Haven models tagged with 19 semantic kinds (`rock` ×29, `plant`
+>   ×20, `machine` ×19, `lamp` ×17, …). The agent's `place_asset` enum is now
+>   the *kind* list (a small stable vocabulary a local GGUF holds reliably);
+>   the host resolves each call to a concrete variant — mood-neighbourhood
+>   preferred, rotating so repeats differ — and records kind + file in the
+>   `SceneBuild`, so replay stays exact. New `scatter_field` tool: one call
+>   scatters ≤48 instances of a kind across a disk (up to four variants
+>   cycled, (track,name)-seeded jitter) — the per-token richness multiplier.
+>   World placement moved from per-asset counts to per-tier budgets
+>   (15/25/27) spent by weighted round-robin: the bigger pool adds variety,
+>   not entities. Extended moods layer their own accents over the base
+>   quadrant's set instead of all-or-nothing borrowing.
+
 > **2026-07 follow-up** (all on `main`):
 > - **Asset pack: 52 CC0 Poly Haven models** (was 7), ~13 per mood incl. full
 >   VELVET CIRCUIT + GLASS EXPANSE coverage; `reverie-assets` gained

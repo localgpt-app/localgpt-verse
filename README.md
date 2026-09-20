@@ -56,26 +56,35 @@ both per-track, both cached in the sidecar so they never re-run:
   washes); landmarks raise kind-matched hero assets with emissive beacons;
   secondary biomes mix in contrasting accent props.
 - **Agent** — a tool-calling session that builds a scene entity-by-entity:
-  `place_asset` places the curated CC0 models (the tool's enum *is* the
-  manifest, so the model can't name an absent asset), `spawn_primitive`
-  composes raw shapes, plus lights/environment/`scene_info` to review and
-  iterate. Its `SceneBuild` replays deterministically on every revisit, and
-  entities are scoped to their track — a lookahead session never pops into
-  the playing world; its scene reveals when the track becomes current.
+  `place_asset` places the curated CC0 models by *kind* (`rock`, `tree`,
+  `lamp`, …) — a small stable enum the local model can hold reliably, while
+  the host resolves each call to a concrete variant that fits the track's mood
+  and rotates so repeats differ — `scatter_field` scatters a whole field of
+  one kind in a single call, `spawn_primitive` composes raw shapes, plus
+  lights/environment/`scene_info` to review and iterate. Its `SceneBuild`
+  records both the asked kind and the resolved file, so it replays
+  deterministically on every revisit, and entities are scoped to their track —
+  a lookahead session never pops into the playing world; its scene reveals
+  when the track becomes current.
 
 Every emissive/light value the agent authors passes the Comfort gates at
 execution time. Without the feature or the model the app keeps the
 rule-derived world verbatim (CI compiles both tiers so they can't rot).
 
-**Asset pack:** 52 CC0 Poly Haven models (~13 per mood) live in the separate
-`reverie-assets` repo (`fetch_polyhaven.py` downloads + writes the manifest;
+**Asset pack:** 171 CC0 Poly Haven models live in the separate `reverie-assets`
+repo (`fetch_polyhaven.py` downloads + writes the manifest with a semantic
+`kind` per asset — 19 kinds, from `rock` ×29 variants to `lamp` ×17;
 `normalize.py` packs each model to a single uncompressed `.glb` — bevy_gltf
 supports neither quantized nor meshopt-compressed geometry — and syncs the
-manifest-referenced set into `assets/models/`). Placement rescales each model
-to its tier's span (hero 7 m / prop 2.5 m / cover 1 m), culls by
-`VisibilityRange`, and arranges per mood: organic spiral (Ember/Tide), city
-grid (Velvet Circuit), crystal rings (Glass Expanse). The Credits screen
-renders the manifest.
+manifest-referenced set into `assets/models/`). Placement holds a per-tier
+entity budget (15 heroes / 25 props / 27 cover seeds) and spends it across the
+mood's pool by weighted round-robin, so a bigger pack means more variety, not
+more entities; each model rescales to its tier's span (hero 7 m / prop 2.5 m /
+cover 1 m), culls by `VisibilityRange`, and arranges per mood: organic spiral
+(Ember/Tide), city grid (Velvet Circuit), crystal rings (Glass Expanse). The
+extended moods (Cinder Reach, Mirage Circuit, Abyss Terraces, Dawn Expanse)
+layer their own accents on top of their base quadrant's set. The Credits
+screen renders the manifest.
 
 ### Controls
 

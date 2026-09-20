@@ -274,11 +274,14 @@ the mistral.rs constraints below.
 
 The world-builder alternative: a tool-calling loop.
 
-- **Input** — a system prompt (song context + "8–16 structures") plus seven
-  JSON tool schemas: `spawn_primitive`, `place_asset`, `modify_entity`,
-  `delete_entity`, `set_light`, `set_environment`, `scene_info`. The
-  `place_asset` schema's enum **is** the 52-model manifest, so the model can
-  only name assets that exist.
+- **Input** — a system prompt (song context + "8–16 structures") plus eight
+  JSON tool schemas: `spawn_primitive`, `place_asset`, `scatter_field`,
+  `modify_entity`, `delete_entity`, `set_light`, `set_environment`,
+  `scene_info`. `place_asset`/`scatter_field` speak a two-level vocabulary:
+  their enum is the manifest's semantic *kinds* (~19 stable tokens), and the
+  host resolves each call to a concrete variant (mood-preferred, rotating), so
+  the model can only ask for what exists while diversity scales with the
+  pool, not the enum.
 - **Output** — a sequence of chat turns, each either tool calls (executed by
   the Bevy-side executor, results fed back, so it can review via
   `scene_info` and iterate) or a closing text description. Verified sessions
