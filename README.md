@@ -13,6 +13,9 @@ are simulated (`src/playback.rs`) so the HUD is already wired to react.
 Reverie is a **standalone Cargo project**: it declares its own `[workspace]`,
 so it builds the same on its own or checked out inside another Cargo workspace.
 
+**Website:** the marketing landing page and docs live in [`site/`](site/) —
+static HTML/CSS/JS, no build step (`cd site && python3 -m http.server`).
+
 ## Run
 
 ```bash

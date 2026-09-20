@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Controls &amp; HUD — Reverie docs</title>
+<meta name="description" content="Every key in Reverie: fly and drift cameras, the three-state HUD, queue, library, pause, comfort settings, and photo mode.">
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="stylesheet" href="../assets/css/style.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="../index.html">
+      <img src="../assets/favicon.svg" alt="" width="26" height="26">
+      Reverie
+    </a>
+    <button class="nav-toggle" aria-label="Menu" aria-expanded="false">☰</button>
+    <nav class="nav-links">
+      <a href="../index.html">Overview</a>
+      <a href="index.html" aria-current="page">Docs</a>
+      <a href="worlds.html">Worlds</a>
+      <a href="https://github.com/localgpt-app/reverie">GitHub</a>
+      <a class="btn btn-primary nav-cta" href="index.html">Get started</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap docs-hero">
+  <h1>Controls &amp; HUD</h1>
+  <p class="lede">Chrome that rents, it doesn't own: one system, three states,
+  and a single accent sampled from the world.</p>
+</div>
+
+<div class="wrap docs-body">
+  <aside class="docs-nav">
+    <div class="group">
+      <p class="group-label">Docs</p>
+      <ul>
+        <li><a href="index.html">Getting started</a></li>
+        <li><a href="controls.html" class="active">Controls &amp; HUD</a></li>
+        <li><a href="worlds.html">Worlds &amp; moods</a></li>
+        <li><a href="analysis.html">Under the hood</a></li>
+        <li><a href="development.html">Development</a></li>
+      </ul>
+    </div>
+    <div class="group">
+      <p class="group-label">On this page</p>
+      <ul>
+        <li><a href="#keys">Keyboard &amp; mouse</a></li>
+        <li><a href="#hud">The HUD's three states</a></li>
+        <li><a href="#overlays">Overlays &amp; panels</a></li>
+        <li><a href="#comfort">Comfort</a></li>
+        <li><a href="#photo">Photo mode</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <main class="prose">
+
+    <h2 id="keys">Keyboard &amp; mouse</h2>
+    <table>
+      <thead><tr><th>Input</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td><kbd>W A S D</kbd> + mouse</td><td>Fly / look (Explore locks the pointer — full 360°, straight up and down)</td></tr>
+        <tr><td><kbd>Space</kbd> / <kbd>Shift</kbd></td><td>Fly up / down (Explore)</td></tr>
+        <tr><td>Scroll</td><td>Fly speed (Explore)</td></tr>
+        <tr><td><kbd>F</kbd> / click tabs</td><td>Toggle Explore / Drift camera (Drift frees the cursor)</td></tr>
+        <tr><td><kbd>E</kbd></td><td>Send a pulse</td></tr>
+        <tr><td><kbd>N</kbd></td><td>Next track</td></tr>
+        <tr><td><kbd>Tab</kbd></td><td>Open / close the queue</td></tr>
+        <tr><td><kbd>L</kbd></td><td>Open / close the library (pick a world)</td></tr>
+        <tr><td><kbd>Esc</kbd></td><td>Pause (world time-dilates) · resume · close the top overlay</td></tr>
+        <tr><td><kbd>H</kbd></td><td>Hide the HUD now</td></tr>
+        <tr><td><kbd>P</kbd></td><td>Photo mode — hide the chrome and save a shot to <code>reverie-photos/</code></td></tr>
+        <tr><td><kbd>←</kbd> / <kbd>→</kbd></td><td>Adjust world intensity (while paused)</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="hud">The HUD's three states</h2>
+    <p>The HUD follows the design spec's "one system, three states":</p>
+    <ul>
+      <li><b>Visible</b> while you're active — now-playing cluster, beat-reactive
+        progress with section notches, control hints, and the Explore/Drift
+        toggle.</li>
+      <li><b>Minimized</b> to a hairline after four seconds idle.</li>
+      <li><b>Hidden</b> entirely when you stay away — or instantly, with
+        <kbd>H</kbd>.</li>
+    </ul>
+    <p>Any input wakes it. The one variable across the whole chrome is the
+    accent, sampled from the current world's palette — the same rule this
+    website follows.</p>
+
+    <h2 id="overlays">Overlays &amp; panels</h2>
+    <ul>
+      <li><b>Pause</b> (<kbd>Esc</kbd>) — freezes into a time-dilated world and
+        offers resume, settings, photo mode, and the <b>world intensity</b>
+        slider (<kbd>←</kbd>/<kbd>→</kbd>).</li>
+      <li><b>Queue</b> (<kbd>Tab</kbd>) — a slide-in, now-playing-first view with
+        ↑/↓ reorder buttons. Tracks carry a content-hash id, so imports dedupe
+        and reordering never restarts the playing track.</li>
+      <li><b>Library</b> (<kbd>L</kbd>) — the world moods as selectable cards;
+        pick one to jump worlds.</li>
+      <li><b>Settings</b> — the <b>Comfort</b> group works today; the remaining
+        groups are display-only placeholders for now.</li>
+      <li><b>Credits &amp; Licenses</b> — renders the asset manifest: every
+        model's name, author, and license.</li>
+      <li><b>Onboarding</b> — the three-step first run (photosensitivity →
+        controls → import); <kbd>Esc</kbd> closes the top overlay first, always.</li>
+    </ul>
+
+    <h2 id="comfort">Comfort</h2>
+    <p>Comfort is a cross-cutting gate, checked at the effect sites rather than
+    in the UI — so every new effect inherits the discipline. Both options
+    apply instantly:</p>
+    <ul>
+      <li><b>Reduce flashing</b> — holds the world glow steady (no beat pulse)
+        and caps UI pulses.</li>
+      <li><b>Gentler world motion</b> — damps the sway.</li>
+    </ul>
+    <div class="note">This website follows the same rule: palette cycling and
+    reveal animations switch off entirely under your system's
+    <code>prefers-reduced-motion</code> setting.</div>
+
+    <h2 id="photo">Photo mode</h2>
+    <p>Press <kbd>P</kbd> (or the pause menu's button) to clear the chrome and
+    save a clean screenshot of the world to <code>reverie-photos/</code>. If a
+    capture reads back black — a known GPU readback flake on some machines —
+    Reverie retries automatically before writing the file.</p>
+
+    <div class="docs-pager">
+      <a href="index.html"><small>Previous</small>← Getting started</a>
+      <a class="next" href="worlds.html"><small>Next</small>Worlds &amp; moods →</a>
+    </div>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <h4>Reverie</h4>
+        <p style="max-width: 26rem;">A desktop app that imagines a 3D world for
+        every song — built with <a href="https://bevyengine.org/">Bevy</a>, driven
+        by on-device music analysis, and free inside and out.</p>
+      </div>
+      <div>
+        <h4>Docs</h4>
+        <ul>
+          <li><a href="index.html">Getting started</a></li>
+          <li><a href="controls.html">Controls &amp; HUD</a></li>
+          <li><a href="worlds.html">Worlds &amp; moods</a></li>
+          <li><a href="analysis.html">Under the hood</a></li>
+          <li><a href="development.html">Development</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a href="https://github.com/localgpt-app/reverie">GitHub</a></li>
+          <li><a href="https://github.com/localgpt-app/reverie/blob/main/LICENSE">Apache-2.0 license</a></li>
+          <li><a href="development.html#licenses">Fonts &amp; asset licenses</a></li>
+        </ul>
+      </div>
+    </div>
+    <p class="fine">Code under Apache-2.0 · Marcellus &amp; Hanken Grotesk under
+    the SIL OFL · 3D models and starter music dedicated to the public domain
+    under CC0.</p>
+  </div>
+</footer>
+
+<script src="../assets/js/main.js"></script>
+</body>
+</html>

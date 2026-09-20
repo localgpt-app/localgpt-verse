@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Under the hood — Reverie docs</title>
+<meta name="description" content="How Reverie turns audio into worlds: the signal-ownership ladder, the DSP analysis pass, CLAP embeddings, stem reactivity, and the local LLM recipe and agent tiers.">
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="stylesheet" href="../assets/css/style.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="../index.html">
+      <img src="../assets/favicon.svg" alt="" width="26" height="26">
+      Reverie
+    </a>
+    <button class="nav-toggle" aria-label="Menu" aria-expanded="false">☰</button>
+    <nav class="nav-links">
+      <a href="../index.html">Overview</a>
+      <a href="index.html" aria-current="page">Docs</a>
+      <a href="worlds.html">Worlds</a>
+      <a href="https://github.com/localgpt-app/reverie">GitHub</a>
+      <a class="btn btn-primary nav-cta" href="index.html">Get started</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap docs-hero">
+  <h1>Under the hood</h1>
+  <p class="lede">From samples to a staged world: the analysis pipeline, the
+  cache, and the optional imagination tiers.</p>
+</div>
+
+<div class="wrap docs-body">
+  <aside class="docs-nav">
+    <div class="group">
+      <p class="group-label">Docs</p>
+      <ul>
+        <li><a href="index.html">Getting started</a></li>
+        <li><a href="controls.html">Controls &amp; HUD</a></li>
+        <li><a href="worlds.html">Worlds &amp; moods</a></li>
+        <li><a href="analysis.html" class="active">Under the hood</a></li>
+        <li><a href="development.html">Development</a></li>
+      </ul>
+    </div>
+    <div class="group">
+      <p class="group-label">On this page</p>
+      <ul>
+        <li><a href="#ladder">The signal ladder</a></li>
+        <li><a href="#cache">The sidecar cache</a></li>
+        <li><a href="#clap">CLAP moods &amp; placement</a></li>
+        <li><a href="#stems">Stem reactivity</a></li>
+        <li><a href="#llm-tiers">The LLM tiers</a></li>
+        <li><a href="#guardrails">Guardrails &amp; fallback</a></li>
+        <li><a href="#model-licenses">Model licenses</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <main class="prose">
+
+    <h2 id="ladder">The signal ladder</h2>
+    <p>Reverie's signals are owned by a strict ladder, and each rung is a
+    strict upgrade with automatic fallback:</p>
+    <ol>
+      <li><b>Simulation</b> owns everything — a silent transport so the app
+        runs with no device and no import.</li>
+      <li><b>Live audio</b> (a kira tap on the output) owns the clock, energy,
+        and onsets once real playback starts.</li>
+      <li><b>The analysis grid</b> owns phase, sections, and mood once the
+        background pass finishes the track.</li>
+    </ol>
+    <p>This is why a missing device, file, manifest, or sidecar can never break
+    the app — each rung only ever <i>improves</i> the world. The UI reads three
+    data resources (<code>Playback</code>, <code>Beat</code>,
+    <code>Theme</code>) and survived every backend replacement with zero
+    changes.</p>
+    <p>The analysis pass itself is offline decode
+    (<a href="https://github.com/pdeljanov/Symphonia">symphonia</a>) → DSP
+    (realfft): tempo (±0.2% against reference), a beat grid with downbeats,
+    section boundaries, an energy curve, and the quadrant mood — all computed
+    on a worker thread while earlier tracks play.</p>
+
+    <h2 id="cache">The sidecar cache</h2>
+    <p>Every result lives in a JSON sidecar keyed by the track's blake3
+    content hash, in the app data directory:</p>
+    <ul>
+      <li>Rename- and move-proof — the key is the file's contents, not its
+        path.</li>
+      <li>Human-debuggable — open one and read exactly what Reverie heard.</li>
+      <li>Never touches the music folder.</li>
+      <li>No schema migrations; optional tiers (embeddings, recipes, scene
+        builds) are just more fields in the same document.</li>
+    </ul>
+
+    <h2 id="clap">CLAP moods &amp; placement</h2>
+    <p>Behind the opt-in <code>ml</code> feature, a
+    <a href="https://github.com/LAION-AI/CLAP">CLAP</a> model (ONNX, run via
+    <code>ort</code>) upgrades two decisions:</p>
+    <ul>
+      <li><b>Zero-shot mood</b> — the track's 512-d audio embedding (three
+        windows averaged) is compared against precomputed text embeddings for
+        the moods. The mel frontend is validated against the reference feature
+        extractor (≤0.5 dB; end-to-end cosine &gt;0.995).</li>
+      <li><b>Embedding-ranked placement</b> — the CLAP text tower embeds each
+        manifest entry's name on a background thread, and placement weights
+        medium-tier counts and the hero fallback by
+        <code>cos(track audio embedding, asset text embedding)</code>,
+        min-max normalized to [0.4, 1.6] — neutral without either signal.</li>
+    </ul>
+    <div class="note">Only the <b>audio→text</b> direction is used: CLAP's
+    text↔text comparisons measured off-manifold, so recipe prose stays
+    keyword-matched.</div>
+
+    <h2 id="stems">Stem reactivity</h2>
+    <p>Also under <code>ml</code>, Demucs stem separation
+    (<code>stem-splitter-core</code>, wrapping htdemucs ONNX, CPU-only) splits
+    each track into stems ahead of playback. The world samples the stem curves
+    at the playhead — a stem value wins over the live band estimate — so bass,
+    drums, and vocals can drive separate subsystems of the world.</p>
+
+    <h2 id="llm-tiers">The LLM tiers</h2>
+    <p>The opt-in <code>llm</code> feature adds a local 8B chat model
+    (<b>Bonsai-8B</b>, Qwen3 architecture, Apache-2.0, run as a Q4_K_M GGUF via
+    mistral.rs — Metal-accelerated under <code>llm-metal</code>). It is the
+    <i>imagination layer only</i>: it never hears the song and never sees the
+    scene.</p>
+    <pre><code>audio file ─► symphonia decode + DSP ─► numbers (BPM, energy,
+                                            sections, mood)
+                                            │
+                                            ▼
+                            Bonsai: text in → text out
+                                            │
+                                            ▼
+                      WorldRecipe JSON / tool-calls ─► Bevy renderer</code></pre>
+
+    <h3>Recipe</h3>
+    <p>Once per track, the model receives what the DSP measured and returns one
+    JSON object — a <code>WorldRecipe</code>: world name, 1–2 biomes, 0–3
+    landmarks, atmosphere, per-section choreography, particles. The renderer
+    interprets it: the recipe's world name replaces the mood name in the HUD,
+    choreography shifts energy and motion per section, landmarks raise
+    kind-matched hero assets with emissive beacons, and secondary biomes mix in
+    contrasting accent props.</p>
+
+    <h3>Agent</h3>
+    <p>The world-builder alternative: a tool-calling loop with seven tools —
+    <code>spawn_primitive</code>, <code>place_asset</code>,
+    <code>modify_entity</code>, <code>delete_entity</code>,
+    <code>set_light</code>, <code>set_environment</code>, and
+    <code>scene_info</code> to review its own work. The
+    <code>place_asset</code> schema's enum <i>is</i> the 52-model manifest, so
+    the model can only name assets that exist. Sessions run to a 24-tool-call
+    budget and cache as a <code>SceneBuild</code>, replayed deterministically
+    on every revisit — entities are scoped to their track, so a lookahead
+    session never pops into the playing world.</p>
+
+    <h2 id="guardrails">Guardrails &amp; fallback</h2>
+    <ul>
+      <li>All guardrails live on the Rust side: <code>WorldRecipe::clamped()</code>
+        bounds every value, serde defaults patch partial output.</li>
+      <li>Every emissive and light value the agent authors passes the
+        <a href="controls.html#comfort">Comfort</a> gates at execution time.</li>
+      <li>Any failure — missing model, malformed JSON, over-budget session —
+        degrades to the rule-derived world. The optional tiers only ever add.</li>
+    </ul>
+
+    <h2 id="model-licenses">Model licenses</h2>
+    <table>
+      <thead><tr><th>Component</th><th>License</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td>Reverie code</td><td>Apache-2.0</td><td>Commercial-friendly</td></tr>
+        <tr><td>Rule mood mapper</td><td>Apache-2.0</td><td>The shipping mood tier</td></tr>
+        <tr><td>stem-splitter-core (Demucs)</td><td>MIT / Apache-2.0</td><td>Commercial-friendly</td></tr>
+        <tr><td>Bonsai-8B weights</td><td>Apache-2.0</td><td>Commercial-friendly</td></tr>
+        <tr><td>CLAP weights (LAION)</td><td>CC-BY-NC-4.0</td><td><b>Not</b> cleared for commercial distribution</td></tr>
+      </tbody>
+    </table>
+    <div class="warn"><b>Weights ≠ code.</b> A model's code being Apache/MIT
+    says nothing about its checkpoint. Verify each weight file's terms before
+    shipping anything commercially — the CLAP weights in particular are
+    research-only.</div>
+
+    <div class="docs-pager">
+      <a href="worlds.html"><small>Previous</small>← Worlds &amp; moods</a>
+      <a class="next" href="development.html"><small>Next</small>Development →</a>
+    </div>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <h4>Reverie</h4>
+        <p style="max-width: 26rem;">A desktop app that imagines a 3D world for
+        every song — built with <a href="https://bevyengine.org/">Bevy</a>, driven
+        by on-device music analysis, and free inside and out.</p>
+      </div>
+      <div>
+        <h4>Docs</h4>
+        <ul>
+          <li><a href="index.html">Getting started</a></li>
+          <li><a href="controls.html">Controls &amp; HUD</a></li>
+          <li><a href="worlds.html">Worlds &amp; moods</a></li>
+          <li><a href="analysis.html">Under the hood</a></li>
+          <li><a href="development.html">Development</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a href="https://github.com/localgpt-app/reverie">GitHub</a></li>
+          <li><a href="https://github.com/localgpt-app/reverie/blob/main/LICENSE">Apache-2.0 license</a></li>
+          <li><a href="development.html#licenses">Fonts &amp; asset licenses</a></li>
+        </ul>
+      </div>
+    </div>
+    <p class="fine">Code under Apache-2.0 · Marcellus &amp; Hanken Grotesk under
+    the SIL OFL · 3D models and starter music dedicated to the public domain
+    under CC0.</p>
+  </div>
+</footer>
+
+<script src="../assets/js/main.js"></script>
+</body>
+</html>
