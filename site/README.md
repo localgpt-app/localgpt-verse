@@ -14,8 +14,16 @@ cd site && python3 -m http.server 8000
 
 ## Deploy
 
-Serve this directory from any static host (GitHub Pages, Netlify, S3, nginx).
-There is nothing to compile — upload the contents of `site/` as-is.
+Published to Cloudflare Workers as the `localgpt-verse` Worker (see `wrangler.jsonc` —
+static assets only, no Worker script):
+
+```bash
+scripts/publish-site.sh        # or: cd site && npx wrangler deploy
+```
+
+First run needs `npx wrangler login` (or `CLOUDFLARE_API_TOKEN` in CI). Any other
+static host (GitHub Pages, Netlify, S3, nginx) also works — there is nothing to
+compile, upload the contents of `site/` as-is.
 
 ## Structure
 
