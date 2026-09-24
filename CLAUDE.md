@@ -24,7 +24,10 @@ VERSE_SMOKE=1 VERSE_SHOT=/tmp cargo run     # offscreen screenshots, then exit
 ```
 
 Run `cargo check` after every change and fix all errors before reporting
-completion. Run clippy and fmt before committing.
+completion. Run clippy and fmt before committing. CI
+(`.github/workflows/ci.yml`) runs fmt, clippy, the tests, the llm/ml feature
+checks and cargo-deny (`deny.toml`); advisories run on main and weekly, never
+on pull requests.
 
 ## Architecture notes
 

@@ -5,35 +5,74 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Monday 06:00 UTC: re-run the advisory audit against the current RustSec
+    # database, so a new advisory surfaces without waiting for a push.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+# A newer push to the same branch supersedes the runs in flight.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  # Same list as LocalGPT and MD: alsa/udev for bevy_audio and gilrs, wayland
+  # for wayland-sys, xkbcommon for winit, fontconfig for bevy_text (fontique).
+  BEVY_APT_DEPS: libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev pkg-config
 
 jobs:
-  # Tests are headless (DSP/logic); no GPU or display server needed.
-  build:
-    name: Build & test
+  fmt:
+    name: Format
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
-      # libwayland-dev: Bevy's Linux windowing builds wayland-sys, whose build
-      # script needs wayland-client from pkg-config. libfontconfig1-dev: Bevy
-      # 0.19's bevy_text pulls fontique -> yeslogic-fontconfig-sys, which
-      # needs fontconfig from pkg-config.
-      - name: Install Bevy/audio build deps
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev libfontconfig1-dev pkg-config
+          components: rustfmt
       - run: cargo fmt -- --check
+
+  clippy:
+    name: Clippy
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $BEVY_APT_DEPS
       - run: cargo clippy --tests -- -D warnings
+
+  # Tests are headless (DSP/logic); no GPU or display server needed.
+  test:
+    name: Test
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $BEVY_APT_DEPS
       - run: cargo test
-      # The opt-in tiers (ml: ort/CLAP/Demucs; llm: mistralrs recipes + agent)
-      # are compiled by neither of the steps above — without these gates the
-      # gated code could rot broken while default-feature CI stays green.
-      # Check only (no clippy/tests): both pull heavy native deps; the goal is
-      # "it compiles", the lint bar stays on the default build.
+
+  # The opt-in tiers (ml: ort/CLAP/Demucs; llm: mistralrs recipes + agent)
+  # are compiled by none of the jobs above — without these gates the gated
+  # code could rot broken while default-feature CI stays green. Check only
+  # (no clippy/tests): both pull heavy native deps; the lint bar stays on the
+  # default build.
+  features:
+    name: Feature tiers
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $BEVY_APT_DEPS
       - run: cargo check --features llm
       # ort-sys would otherwise fetch ONNX Runtime from cdn.pyke.io, which
       # GitHub-hosted runners can't reach, so point it at Microsoft's release.
@@ -56,10 +95,11 @@ jobs:
           ORT_LIB_LOCATION: /opt/onnxruntime/lib
           ORT_PREFER_DYNAMIC_LINK: "1"
 
-  # Licenses, bans and sources only change when Cargo.lock does, so they gate
-  # every change. Policy lives in deny.toml.
-  dependency-policy:
+  # Licenses, bans and sources only change with Cargo.lock and deny.toml, so
+  # they gate every change. Policy lives in deny.toml.
+  deps:
     name: Dependency policy
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,12 +107,12 @@ jobs:
         with:
           command: check licenses bans sources
 
-  # Advisories change with the RustSec database, not with this repo, so they
-  # report without blocking merges on code that didn't move.
+  # RustSec advisories change with the database, not with this repo: they run
+  # on main and weekly, and never block a pull request on code that didn't move.
   advisories:
     name: Security advisories
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
