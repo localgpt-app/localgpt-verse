@@ -21,9 +21,11 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       # libwayland-dev: Bevy's Linux windowing builds wayland-sys, whose build
-      # script needs wayland-client from pkg-config.
+      # script needs wayland-client from pkg-config. libfontconfig1-dev: Bevy
+      # 0.19's bevy_text pulls fontique -> yeslogic-fontconfig-sys, which
+      # needs fontconfig from pkg-config.
       - name: Install Bevy/audio build deps
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev libfontconfig1-dev pkg-config
       - run: cargo fmt -- --check
       - run: cargo clippy --tests -- -D warnings
       - run: cargo test

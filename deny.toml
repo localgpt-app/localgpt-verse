@@ -14,6 +14,10 @@ all-features = true
 
 [advisories]
 ignore = [
+    { id = "RUSTSEC-2025-0057", reason = "fxhash: unmaintained, transitive via bm25 -> mistralrs-core (llm feature); no upgrade available" },
+    { id = "RUSTSEC-2025-0119", reason = "number_prefix: unmaintained, transitive via indicatif -> hf-hub -> mistralrs (llm feature); no upgrade available" },
+    { id = "RUSTSEC-2024-0436", reason = "paste: unmaintained, transitive via gemm/candle -> mistralrs (llm feature); no upgrade available" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser: unmaintained, transitive via winit -> sctk-adwaita (Wayland window decorations); no upgrade available" },
 ]
 
 [licenses]
