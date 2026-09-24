@@ -5316,11 +5316,13 @@ dependencies = [
  "dirs",
  "ebur128",
  "kira",
+ "localgpt-world-types",
  "lofty",
  "mistralrs",
  "ort",
  "realfft",
  "rfd",
+ "ron",
  "rubato 0.16.2",
  "schemars 1.2.1",
  "serde",
@@ -5330,6 +5332,15 @@ dependencies = [
  "tokenizers 0.21.4",
  "tokio",
  "walkdir",
+]
+
+[[package]]
+name = "localgpt-world-types"
+version = "0.3.6"
+source = "git+https://github.com/localgpt-app/localgpt?branch=claude%2Flocalgpt-world-strategy-vl97wr#23b8af0252c5998a7a01064c0a4879aba90c5a8a"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

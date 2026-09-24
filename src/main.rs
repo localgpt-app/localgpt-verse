@@ -27,6 +27,7 @@ mod theme;
 mod tier;
 mod world;
 mod world_assets;
+mod world_manifest;
 
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
