@@ -5337,7 +5337,7 @@ dependencies = [
 [[package]]
 name = "localgpt-world-types"
 version = "0.3.6"
-source = "git+https://github.com/localgpt-app/localgpt?branch=claude%2Flocalgpt-world-strategy-vl97wr#6825213b4485d345175aa3fe199cb53fd8fea457"
+source = "git+https://github.com/localgpt-app/localgpt?rev=6825213b4485d345175aa3fe199cb53fd8fea457#6825213b4485d345175aa3fe199cb53fd8fea457"
 dependencies = [
  "serde",
  "serde_json",
