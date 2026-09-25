@@ -48,4 +48,7 @@ on pull requests.
 - Commits: conventional commits (`feat:`, `fix:`, `docs:`, `chore:`,
   `refactor:`), with no Co-Authored-By or Claude-Session trailers.
 - Never use `sed` to edit Rust files; use the Edit tool.
-- `site/` is the static landing page for verse.localgpt.app (no build step).
+- `website/` is the static landing page for verse.localgpt.app (no build
+  step; `website/deploy.sh` deploys it). The docs live on localgpt.app, in the
+  `localgpt` repository's `website/docs/verse/`: update them there when
+  controls, worlds or the build change, and don't add docs pages here.

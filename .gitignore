@@ -12,5 +12,5 @@
 /assets/music
 # LLM model (M7): downloaded via scripts/fetch-bonsai.sh, never committed
 /assets/llm
-# Wrangler local state (scripts/publish-site.sh / wrangler dev)
-/site/.wrangler
+# Wrangler local state (website/deploy.sh / wrangler dev)
+/website/.wrangler
