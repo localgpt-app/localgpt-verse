@@ -13,8 +13,10 @@ are simulated (`src/playback.rs`) so the HUD is already wired to react.
 LocalGPT Verse is a **standalone Cargo project**: it declares its own `[workspace]`,
 so it builds the same on its own or checked out inside another Cargo workspace.
 
-**Website:** the marketing landing page and docs live in [`site/`](site/) —
-static HTML/CSS/JS, no build step (`cd site && python3 -m http.server`).
+**Website:** the landing page for [verse.localgpt.app](https://verse.localgpt.app/)
+lives in [`website/`](website/) — static HTML/CSS/JS, no build step
+(`python3 -m http.server -d website`). The docs are at
+[localgpt.app/docs/verse](https://localgpt.app/docs/verse).
 
 ## Run
 

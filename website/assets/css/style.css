@@ -37,19 +37,18 @@
   --radius-pill: 9999px;
 
   /* The one variable — sampled from the "current world" (main.js cycles it
-     on the landing; docs pages keep the Ember Flats default). */
+     through the eight worlds; Ember Flats is the default). */
   --accent: #ffb38a;
 
   --font-display: "Marcellus", "Iowan Old Style", Georgia, serif;
   --font-ui: "Hanken Grotesk", -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 
-  --measure: 44rem;
   --page-pad: clamp(1.25rem, 4vw, 3rem);
 }
 
 /* The eight worlds (src/theme.rs BUILTIN_MOODS). Each class sets the world's
-   palette on whatever element carries it — hero stage, mood card, swatch. */
+   palette on whatever element carries it — hero stage, mood card. */
 .mood-ember-flats    { --m-accent: #ffb38a; --m-sky-top: #ffd9b0; --m-sky-bottom: #c9836f; --m-fog: #9e6b66; --m-ground: #7a4f63; }
 .mood-velvet-circuit { --m-accent: #62f5ff; --m-sky-top: #241054; --m-sky-bottom: #0b0722; --m-fog: #3d1a57; --m-ground: #0d0b2a; }
 .mood-tide-gardens   { --m-accent: #a8d8de; --m-sky-top: #12333e; --m-sky-bottom: #0b0c11; --m-fog: #2d6a72; --m-ground: #12333e; }
@@ -500,21 +499,6 @@ pre .c-acc { color: var(--accent); }
 }
 .terminal pre { border: 0; border-radius: 0; margin: 0; }
 
-/* ---------- Callouts ---------- */
-
-.note, .warn {
-  border: 1px solid var(--hairline);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-sm);
-  background: var(--base-raise);
-  padding: 0.9rem 1.2rem;
-  margin: 1.4rem 0;
-  font-size: 0.95rem;
-  color: var(--text-dim);
-}
-.warn { border-left-color: #e8c06a; }
-.note b, .warn b { color: var(--text); }
-
 /* ---------- Footer ---------- */
 
 .footer {
@@ -526,7 +510,7 @@ pre .c-acc { color: var(--accent); }
 
 .footer-grid {
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
   gap: 2rem;
 }
 
@@ -546,120 +530,6 @@ pre .c-acc { color: var(--accent); }
 
 .footer .fine { margin-top: 2.5rem; padding-top: 1.4rem; border-top: 1px solid var(--hairline); }
 
-/* ---------- Docs layout ---------- */
-
-.docs-hero {
-  padding: 8.5rem 0 2.5rem;
-  border-bottom: 1px solid var(--hairline);
-}
-.docs-hero h1 { font-size: clamp(2rem, 4vw, 3rem); margin-bottom: 0.3em; }
-
-.docs-body {
-  display: grid;
-  grid-template-columns: 15rem 1fr;
-  gap: clamp(2rem, 5vw, 4.5rem);
-  padding: 2.5rem 0 6rem;
-}
-
-.docs-nav {
-  position: sticky;
-  top: 84px;
-  align-self: start;
-  font-size: 0.9rem;
-}
-.docs-nav .group { margin-bottom: 1.6rem; }
-.docs-nav .group-label {
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-bottom: 0.5rem;
-}
-.docs-nav ul { list-style: none; margin: 0; padding: 0; }
-.docs-nav li { margin: 0; }
-.docs-nav a {
-  display: block;
-  padding: 0.28rem 0 0.28rem 0.9rem;
-  border-left: 1px solid var(--hairline);
-  color: var(--text-muted);
-}
-.docs-nav a:hover { color: var(--text); text-decoration: none; }
-.docs-nav a.active { color: var(--accent); border-left-color: var(--accent); }
-
-.prose { max-width: var(--measure); min-width: 0; }
-.prose h2 {
-  font-size: 1.7rem;
-  margin-top: 2.6rem;
-  padding-top: 1.6rem;
-  border-top: 1px solid var(--hairline);
-}
-.prose h2:first-of-type { margin-top: 0; padding-top: 0; border-top: 0; }
-.prose h3 { font-size: 1.2rem; margin-top: 2rem; }
-.prose p, .prose li { color: var(--text-dim); }
-.prose ul, .prose ol { padding-left: 1.4rem; }
-.prose li { margin-bottom: 0.35rem; }
-.prose li::marker { color: var(--accent); }
-
-.prose table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 1.4rem 0;
-  font-size: 0.93rem;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  display: block;
-  overflow-x: auto;
-}
-.prose th, .prose td {
-  text-align: left;
-  padding: 0.6rem 0.9rem;
-  border-bottom: 1px solid var(--hairline);
-  white-space: nowrap;
-}
-.prose td:last-child, .prose th:last-child { white-space: normal; }
-.prose th {
-  font-size: 0.72rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  background: var(--veil-hud);
-}
-.prose tr:last-child td { border-bottom: 0; }
-.prose kbd {
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid var(--hairline);
-  border-bottom-width: 2px;
-  border-radius: 6px;
-  padding: 0.1em 0.5em;
-  font-size: 0.8em;
-  white-space: nowrap;
-}
-
-.docs-pager {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-top: 4rem;
-  padding-top: 1.6rem;
-  border-top: 1px solid var(--hairline);
-}
-.docs-pager a { color: var(--text-dim); font-weight: 500; }
-.docs-pager a:hover { color: var(--accent); text-decoration: none; }
-.docs-pager .next { margin-left: auto; text-align: right; }
-.docs-pager small { display: block; color: var(--text-muted); font-size: 0.78rem; letter-spacing: 0.1em; text-transform: uppercase; }
-
-/* docs swatch row for mood tables etc. */
-.swatch {
-  display: inline-block;
-  width: 0.85em; height: 0.85em;
-  border-radius: 3px;
-  margin-right: 0.45em;
-  vertical-align: -0.08em;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-}
-
 /* ---------- Reveal animation ---------- */
 
 .reveal {
@@ -676,17 +546,6 @@ pre .c-acc { color: var(--accent); }
   .worlds-grid { grid-template-columns: repeat(2, 1fr); }
   .quickstart { grid-template-columns: 1fr; }
   .footer-grid { grid-template-columns: 1fr 1fr; }
-
-  .docs-body { grid-template-columns: 1fr; }
-  .docs-nav {
-    position: static;
-    display: flex;
-    gap: 1.5rem;
-    flex-wrap: wrap;
-    padding-bottom: 1.2rem;
-    border-bottom: 1px solid var(--hairline);
-  }
-  .docs-nav .group { margin-bottom: 0; }
 }
 
 @media (max-width: 40rem) {

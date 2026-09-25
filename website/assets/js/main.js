@@ -69,37 +69,4 @@
       revealables.forEach(function (el) { revealObserver.observe(el); });
     }
   }
-
-  /* ---------- Docs sidebar: highlight the section in view ---------- */
-  var sidebar = document.querySelector(".docs-nav");
-  if (sidebar && "IntersectionObserver" in window) {
-    var tocLinks = Array.prototype.slice.call(sidebar.querySelectorAll('a[href^="#"]'));
-    var sections = tocLinks
-      .map(function (a) { return document.getElementById(a.getAttribute("href").slice(1)); })
-      .filter(Boolean);
-
-    if (sections.length) {
-      var onScreen = new Map();
-      var spy = new IntersectionObserver(function (entries) {
-        entries.forEach(function (entry) {
-          onScreen.set(entry.target.id, entry.isIntersecting);
-        });
-        var current = null;
-        sections.forEach(function (section) {
-          if (onScreen.get(section.id) && !current) current = section.id;
-        });
-        if (!current) {
-          sections.forEach(function (section) {
-            if (!current && section.getBoundingClientRect().top < window.innerHeight * 0.5) {
-              current = section.id;
-            }
-          });
-        }
-        tocLinks.forEach(function (a) {
-          a.classList.toggle("active", a.getAttribute("href") === "#" + current);
-        });
-      }, { rootMargin: "-80px 0px -55% 0px" });
-      sections.forEach(function (section) { spy.observe(section); });
-    }
-  }
 })();
