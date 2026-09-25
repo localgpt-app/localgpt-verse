@@ -1,0 +1,48 @@
+# CLAUDE.md
+
+Guidance for Claude Code when working in this repository.
+
+## What this is
+
+LocalGPT Verse: a desktop app (Bevy 0.19) that imagines a 3D world for every
+song, driven by on-device music analysis. `README.md` covers running it and
+the optional `ml` / `llm` tiers; `ARCHITECTURE.md` is the system map and the
+load-bearing decisions; `PLAN.md` the milestones. Standalone Cargo project
+(its own `[workspace]`), Apache-2.0. Siblings: LocalGPT Gen (prompt → world)
+and LocalGPT MD (Markdown → world).
+
+## Commands
+
+```bash
+cargo run                                   # open the app
+cargo test
+cargo clippy --tests -- -D warnings         # CI also checks --features llm and --features ml
+cargo fmt
+VERSE_IMPORT=<dir> cargo run                # import a music folder at startup
+VERSE_EXPORT_WORLD=<dir> cargo run          # write each track's world in the LocalGPT world format
+VERSE_SMOKE=1 VERSE_SHOT=/tmp cargo run     # offscreen screenshots, then exit
+```
+
+Run `cargo check` after every change and fix all errors before reporting
+completion. Run clippy and fmt before committing.
+
+## Architecture notes
+
+- `src/world_manifest.rs` exports a track's world as a `localgpt-world-types`
+  `WorldManifest` (the shared LocalGPT world format): mood palette, the
+  agent's scene build, a `SoundtrackDef` with the analysis curves, and
+  modulations. Never the audio file or the CLAP embedding. Add fields to
+  world-types upstream (`localgpt/crates/world-types`) rather than a parallel
+  format; the crate is pinned to a localgpt commit until its next release.
+- The LLM tiers' constraints are documented in `ARCHITECTURE.md` §10 and must
+  be re-verified on any mistral.rs bump.
+
+## Rules
+
+- License is Apache-2.0. Never copy code from Local Native or Fastxt (AGPL-3.0).
+- This repo is public. Never name the closed-source sibling 3D platform; use
+  generic terms such as "connected 3D app".
+- Commits: conventional commits (`feat:`, `fix:`, `docs:`, `chore:`,
+  `refactor:`), with no Co-Authored-By or Claude-Session trailers.
+- Never use `sed` to edit Rust files; use the Edit tool.
+- `site/` is the static landing page for verse.localgpt.app (no build step).
