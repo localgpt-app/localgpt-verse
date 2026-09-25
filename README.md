@@ -111,6 +111,25 @@ active, fading to a **Minimized** hairline after 4s idle, then **Hidden**
 entirely. Any input wakes it. The one variable is the accent, sampled from the
 current world's palette.
 
+## Export a world
+
+```bash
+VERSE_EXPORT_WORLD=/tmp/verse-worlds cargo run
+```
+
+writes each track's world, as it becomes current, in LocalGPT's shared world
+format (`localgpt-world-types`): `<track id>.world.json` for the web viewer on
+localgpt.world and `<track id>.world.ron` for LocalGPT Gen. The manifest
+carries the mood palette, a ground and a sun, the agent's scene build
+(primitives, placed CC0 models, scatter fields, lights) and a `soundtrack`
+section with the track's analysis — tempo, beat grid, sections, the energy
+curve, stem envelopes — plus `modulations` that bind entities to it, so the
+world performs the song anywhere the format renders. What it never contains:
+the audio file (personal libraries export with no `path`; the world performs
+silently from its curves) and the CLAP embedding. See `src/world_manifest.rs`
+for what is not exported yet (the rule-based ground cover, section scoping,
+particles, the waveform skyline).
+
 ## What's implemented
 
 - **Design system** (`src/theme.rs`) — veils, hairline, radii, type roles, and

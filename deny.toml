@@ -51,3 +51,5 @@ multiple-versions = "warn"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# The shared world format, until its next crates.io release (see Cargo.toml).
+allow-git = ["https://github.com/localgpt-app/localgpt"]

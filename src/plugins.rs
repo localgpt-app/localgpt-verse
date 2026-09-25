@@ -57,6 +57,9 @@ impl Plugin for VersePlugins {
             HudPlugin,
             OverlaysPlugin,
             DiagnosticsPlugin,
+            // `VERSE_EXPORT_WORLD=<dir>`: each track's world in the shared
+            // LocalGPT world format. Dormant without the variable.
+            crate::world_manifest::WorldExportPlugin,
         ));
 
         #[cfg(feature = "llm")]
